@@ -25,15 +25,24 @@ func ValidateGroupOutbounds(options Options) error {
 	}
 	for i, outbound := range options.Outbounds {
 		var members []string
+		var fallback string
 		switch group := outbound.Options.(type) {
 		case *SelectorOutboundOptions:
 			members = group.Outbounds
+			fallback = group.EmptyFallback
 		case *URLTestOutboundOptions:
 			members = group.Outbounds
-		default:
+			fallback = group.EmptyFallback
+		case *SubscriptionOutboundOptions:
 			// Subscription.Outbounds selects from its downloaded document;
 			// parseDocument validates that whitelist against that document.
+			fallback = group.EmptyFallback
+		default:
 			continue
+		}
+		if fallback != "" && !tags[fallback] {
+			return E.New("outbound[", i, "] (", tagFor(outbound.Tag, i), ").empty_fallback: ", fallback,
+				" is not declared in this configuration document; empty_fallback must reference a local declaration")
 		}
 		for j, tag := range members {
 			if !tags[tag] {

@@ -15,6 +15,7 @@ type SubscriptionOutboundOptions struct {
 	DrainTimeout        badoption.Duration `json:"drain_timeout,omitempty"`
 	Outbounds           []string           `json:"outbounds,omitempty"`
 	Import              []GroupImport      `json:"import,omitempty"`
+	EmptyFallback       string             `json:"empty_fallback,omitempty" reference:"outbound"`
 	Default             string             `json:"default,omitempty"`
 	Mode                string             `json:"mode,omitempty" enum:"selector,urltest"`
 	TestURL             string             `json:"test_url,omitempty"`

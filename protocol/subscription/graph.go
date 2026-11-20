@@ -433,6 +433,12 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 		// A default only chooses among the effective members. An imported
 		// preference can be temporarily absent and does not add a dial edge.
 		if group, ok := outbound.Options.(*option.SelectorOutboundOptions); ok {
+			if group.EmptyFallback != "" {
+				group.EmptyFallback, err = rewrite("outbound:"+outbound.Tag)("outbound", group.EmptyFallback)
+				if err != nil {
+					return nil, err
+				}
+			}
 			if err := rewriteImports(outbound.Tag, group.Import); err != nil {
 				return nil, err
 			}
@@ -457,6 +463,12 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 			continue
 		}
 		if group, ok := outbound.Options.(*option.URLTestOutboundOptions); ok {
+			if group.EmptyFallback != "" {
+				group.EmptyFallback, err = rewrite("outbound:"+outbound.Tag)("outbound", group.EmptyFallback)
+				if err != nil {
+					return nil, err
+				}
+			}
 			if err := rewriteImports(outbound.Tag, group.Import); err != nil {
 				return nil, err
 			}
@@ -469,6 +481,12 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 			continue
 		}
 		if nested, ok := outbound.Options.(*option.SubscriptionOutboundOptions); ok {
+			if nested.EmptyFallback != "" {
+				nested.EmptyFallback, err = rewrite("outbound:"+outbound.Tag)("outbound", nested.EmptyFallback)
+				if err != nil {
+					return nil, err
+				}
+			}
 			// Imports are live membership dependencies, unlike download edges.
 			if err := rewriteImports(outbound.Tag, nested.Import); err != nil {
 				return nil, err
@@ -484,6 +502,7 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 			// Download edges are bootstrap dependencies, not data-plane cycles.
 			download := *nested
 			download.Import = nil
+			download.EmptyFallback = ""
 			if err := visitReferences(reflect.ValueOf(&download), rewrite("bootstrap:"+outbound.Tag)); err != nil {
 				return nil, err
 			}

@@ -29,23 +29,27 @@ type Snapshot struct {
 // resolves those first, so arbitrarily deep import chains remain live. Group
 // members themselves retain their identity and selection behavior.
 type Members struct {
-	manager adapter.OutboundManager
-	updates *adapter.GroupUpdates
-	owner   string
-	base    func() []string
-	imports []filter
-	history *ImportHistory
-	mu      sync.Mutex
-	cached  *Snapshot
+	manager  adapter.OutboundManager
+	updates  *adapter.GroupUpdates
+	owner    string
+	base     func() []string
+	imports  []filter
+	fallback string
+	history  *ImportHistory
+	mu       sync.Mutex
+	cached   *Snapshot
 }
 
-func New(ctx context.Context, owner string, base func() []string, imports []option.GroupImport) (*Members, error) {
+func New(ctx context.Context, owner string, base func() []string, imports []option.GroupImport, fallback string) (*Members, error) {
+	if fallback != "" && fallback == owner {
+		return nil, E.New("circular empty_fallback: ", owner)
+	}
 	updates := service.PtrFromContext[adapter.GroupUpdates](ctx)
 	if updates == nil {
 		updates = adapter.NewGroupUpdates()
 		service.MustRegisterPtr(ctx, updates)
 	}
-	m := &Members{manager: service.FromContext[adapter.OutboundManager](ctx), updates: updates, owner: owner, base: base, history: service.PtrFromContext[ImportHistory](ctx)}
+	m := &Members{manager: service.FromContext[adapter.OutboundManager](ctx), updates: updates, owner: owner, base: base, fallback: fallback, history: service.PtrFromContext[ImportHistory](ctx)}
 	for i, spec := range imports {
 		if spec.Group == "" {
 			return nil, E.New("import[", i, "]: missing group")
@@ -77,19 +81,22 @@ func New(ctx context.Context, owner string, base func() []string, imports []opti
 	return m, nil
 }
 
-func Dependencies(base []string, imports []option.GroupImport) []string {
+func Dependencies(base []string, imports []option.GroupImport, fallback string) []string {
 	deps := slices.Clone(base)
 	for _, spec := range imports {
 		if !slices.Contains(deps, spec.Group) {
 			deps = append(deps, spec.Group)
 		}
 	}
+	if fallback != "" && !slices.Contains(deps, fallback) {
+		deps = append(deps, fallback)
+	}
 	return deps
 }
 
-func ValidateBase(base []string, hasImports bool) error {
-	if len(base) == 0 && !hasImports {
-		return E.New("missing tags or import")
+func ValidateBase(base []string, hasImports bool, fallback string) error {
+	if len(base) == 0 && !hasImports && fallback == "" {
+		return E.New("missing tags, import or empty_fallback")
 	}
 	for i, tag := range base {
 		if slices.Contains(base[:i], tag) {
@@ -100,6 +107,11 @@ func ValidateBase(base []string, hasImports bool) error {
 }
 
 func (m *Members) Validate(allowPending bool) error {
+	if m.fallback != "" {
+		if _, found := m.manager.Outbound(m.fallback); !found {
+			return E.New("empty_fallback outbound not found: ", m.fallback)
+		}
+	}
 	for _, spec := range m.imports {
 		source, found := m.manager.Outbound(spec.Group)
 		if !found {
@@ -122,7 +134,7 @@ func (m *Members) Validate(allowPending bool) error {
 }
 
 func (m *Members) OptionalImportDependency(tag string) bool {
-	if !m.history.Allows(m.owner, tag) || slices.Contains(m.base(), tag) {
+	if tag == m.fallback || !m.history.Allows(m.owner, tag) || slices.Contains(m.base(), tag) {
 		return false
 	}
 	for _, spec := range m.imports {
@@ -185,6 +197,9 @@ func (m *Members) Resolve() *Snapshot {
 			for _, tag := range group.All() {
 				add(tag, &spec)
 			}
+		}
+		if len(next.Tags) == 0 && m.fallback != "" {
+			add(m.fallback, nil)
 		}
 		m.mu.Lock()
 		current, _ := m.updates.State()

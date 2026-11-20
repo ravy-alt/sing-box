@@ -57,7 +57,7 @@ type URLTest struct {
 
 func NewURLTest(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.URLTestOutboundOptions) (adapter.Outbound, error) {
 	outbound := &URLTest{
-		Adapter:                      outbound.NewAdapter(C.TypeURLTest, tag, []string{N.NetworkTCP, N.NetworkUDP}, groupmembers.Dependencies(options.Outbounds, options.Import)),
+		Adapter:                      outbound.NewAdapter(C.TypeURLTest, tag, []string{N.NetworkTCP, N.NetworkUDP}, groupmembers.Dependencies(options.Outbounds, options.Import, options.EmptyFallback)),
 		ctx:                          ctx,
 		outbound:                     service.FromContext[adapter.OutboundManager](ctx),
 		logger:                       logger,
@@ -68,10 +68,10 @@ func NewURLTest(ctx context.Context, router adapter.Router, logger log.ContextLo
 		idleTimeout:                  time.Duration(options.IdleTimeout),
 		interruptExternalConnections: options.InterruptExistConnections,
 	}
-	if err := groupmembers.ValidateBase(options.Outbounds, len(options.Import) > 0); err != nil {
+	if err := groupmembers.ValidateBase(options.Outbounds, len(options.Import) > 0, options.EmptyFallback); err != nil {
 		return nil, err
 	}
-	members, err := groupmembers.New(ctx, tag, func() []string { return options.Outbounds }, options.Import)
+	members, err := groupmembers.New(ctx, tag, func() []string { return options.Outbounds }, options.Import, options.EmptyFallback)
 	if err != nil {
 		return nil, err
 	}

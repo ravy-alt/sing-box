@@ -56,6 +56,9 @@ func (c *dependencyCoordinator) validate(target *Subscription, candidate *snapsh
 		}
 		node := "outbound:" + s.Tag()
 		graph[node] = nil
+		if s.options.EmptyFallback != "" {
+			graph[node] = append(graph[node], "outbound:"+s.options.EmptyFallback)
+		}
 		for _, spec := range s.options.Import {
 			graph[node] = append(graph[node], "outbound:"+spec.Group)
 		}
@@ -139,6 +142,9 @@ func hostDependencies(ctx context.Context) map[string][]string {
 		node := "outbound:" + tagAt(outbound.Tag, i)
 		if subscription, ok := outbound.Options.(*option.SubscriptionOutboundOptions); ok {
 			collect(node, subscription.Import)
+			if subscription.EmptyFallback != "" {
+				graph[node] = append(graph[node], "outbound:"+subscription.EmptyFallback)
+			}
 			continue
 		}
 		if selector, ok := outbound.Options.(*option.SelectorOutboundOptions); ok {

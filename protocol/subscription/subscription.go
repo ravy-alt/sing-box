@@ -125,7 +125,7 @@ func New(ctx context.Context, router adapter.Router, logger log.ContextLogger, t
 	parent := service.PtrFromContext[snapshot](ctx)
 	ctx, cancel := context.WithCancel(ctx)
 	updatesCtx, cancelUpdates := context.WithCancel(ctx)
-	importDependencies := slices.DeleteFunc(groupmembers.Dependencies(nil, options.Import), func(dependency string) bool { return ownsMember(tag, dependency) })
+	importDependencies := slices.DeleteFunc(groupmembers.Dependencies(nil, options.Import, options.EmptyFallback), func(dependency string) bool { return ownsMember(tag, dependency) })
 	s := &Subscription{updatesCtx: updatesCtx, cancelUpdates: cancelUpdates, dependencies: coordinator, parent: parent,
 		Adapter: outbound.NewAdapter(C.TypeSubscription, tag, []string{N.NetworkTCP, N.NetworkUDP}, importDependencies),
 		ctx:     ctx, cancel: cancel, router: router, logger: logger, options: options, refreshGate: make(chan struct{}, 1), testWake: make(chan struct{}, 1),
@@ -139,7 +139,7 @@ func New(ctx context.Context, router adapter.Router, logger log.ContextLogger, t
 			return nil
 		}
 		return slices.Clone(s.current.members)
-	}, options.Import)
+	}, options.Import, options.EmptyFallback)
 	if err != nil {
 		cancelUpdates()
 		cancel()

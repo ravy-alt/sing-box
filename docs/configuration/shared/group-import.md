@@ -6,7 +6,7 @@
 {
   "type": "selector",
   "tag": "regional",
-  "outbounds": ["direct"],
+  "empty_fallback": "direct",
   "import": [
     {
       "group": "subscription-a",
@@ -20,7 +20,7 @@
 }
 ```
 
-For selectors and URL test groups, at least one of `outbounds` or `import` must be nonempty. A subscription still requires its URL: imports supplement the members selected from its downloaded document. Its `outbounds` whitelist applies only to that document.
+For selectors and URL test groups, at least one of `outbounds`, `import`, or `empty_fallback` must be nonempty. A subscription still requires its URL: imports supplement the members selected from its downloaded document. Its `outbounds` whitelist applies only to that document.
 
 | Field | Meaning |
 | --- | --- |
@@ -36,13 +36,23 @@ Explicit members come first, followed by imports in configuration order and each
 
 An import copies the source's immediate effective member list, including members that source obtained through its own imports. A member that is itself a group remains a group; it is not recursively flattened into its children. To import its children, reference that group in another import entry. Import chains can have multiple levels.
 
+## empty_fallback
+
+`selector`, `urltest`, and `subscription` accept `empty_fallback`, an outbound, endpoint, or group tag declared in the same configuration document. It is a group-level field alongside `import`, not a filter property, and cannot directly reference another subscription's internal member.
+
+Static members (a subscription's downloaded members) and all filtered imports are combined first. The fallback is inserted only if that result is empty, and removed immediately when regular members return. A selector or URL test group with only `empty_fallback` is valid. The effective fallback appears in `All()`, APIs, and multilevel imports; consumers still apply their own filters to it.
+
+This tests membership emptiness, not probe failures, dial failures, or availability inside member groups. It does not bypass filters, missing references, invalid subscriptions, or initial download failures. A subscription must first load a valid document or cache.
+
+The fallback always participates in startup ordering and the complete dependency graph, even while inactive. References inside subscriptions are namespaced using local declarations; deleting a still-referenced fallback rejects the update. Existing connections follow the group's interruption setting and the subscription's generation retention policy.
+
 ## Refresh behavior
 
 A subscription refresh invalidates dependent membership views. Queries and new dials resolve the current members without waiting for polling, and background workers update selection and health checks. Changes propagate through every import level. Filters are reapplied when a node changes type or name, even if its complete tag stays the same.
 
 Selectors retain an available selection. When it disappears, they select the configured default if present, then the first remaining member. The `default` field uses the effective outbound tag; subscriptions also accept the original name of a node in their own document. For selectors with imports, a default is a selection preference: an absent default falls back to remaining members and does not add a member or dialing dependency. Cached choices and defaults are applied after initial subscription loading. URL test groups and subscriptions in `urltest` mode test refreshed members; results from an older membership revision cannot update shared latency history or selection. Retired generations stop membership watchers and probes; shutdown waits for background tasks and admitted manual probes to exit.
 
-An empty source or a filter matching nothing produces no imported members. A destination with no remaining members reports an unavailable outbound rather than choosing an unfiltered node. A source group inside a subscription may disappear or become a non-group during refresh; that import then contributes no members and recovers if the group returns. Initially missing sources or sources that are not groups are configuration errors.
+An empty source or a filter matching nothing produces no imported members. A destination with no remaining members inserts its configured `empty_fallback`, or reports an unavailable outbound if none is configured; it never selects an excluded node automatically. A source group inside a subscription may disappear or become a non-group during refresh; that import then contributes no members and recovers if the group returns. Initially missing sources or sources that are not groups are configuration errors.
 
 Previously admitted imports retain their source identity when the consumer or its parent subscription refreshes. A temporarily unavailable source does not block unrelated consumer updates. New imports or changes to a nonexistent source are still rejected. Removing a local source never redirects the import to a same-name host group; the cache preserves that namespace relationship too, while startup still strictly validates source availability. Restoring a source rechecks the complete dependency graph, so temporarily missing sources cannot bypass cycle validation.
 

@@ -2,6 +2,8 @@
 
 A subscription is a stable outbound group whose members are downloaded from a native sing-box JSON document. Nodes, internal groups, DNS servers and DNS rules are validated and published together without restarting the instance.
 
+`empty_fallback` supports an [empty-group fallback](../shared/group-import.md#empty_fallback) declared in the current configuration document. It is inserted only when the loaded document and filtered imports provide no members.
+
 ## Structure
 
 ```json
@@ -130,7 +132,7 @@ Inline DNS rules are active during bootstrap. Remote rule-sets are loaded afterw
 ## Update semantics and limits
 
 * Retained member handles dial the new implementation after a same-tag update. Deleted members fail explicitly; reintroducing the same tag makes that handle usable again.
-* Explicit `{"outbounds":[]}` or `{"endpoints":[]}` clears its own document members; members contributed by `import` remain. If the combined list is empty, it has no selected member and cannot dial. `ready` means a document was loaded, not that it has reachable members. A document missing both fields is rejected.
+* Explicit `{"outbounds":[]}` or `{"endpoints":[]}` clears its own document members; members contributed by `import` remain. If the combined list is empty, it uses the configured `empty_fallback`, or cannot dial if none is configured. `ready` means a document was loaded, not that it has reachable members. A document missing both fields is rejected.
 * Selector and URL test `outbounds` lists are checked statically against declarations in the same document during configuration checking or subscription loading. Members inside other subscriptions are rejected. Removing a node still referenced by a local group rejects the update and retains the old version. Use `import` to follow another group's members dynamically, or reference a subscription group declared in the current document through `outbounds`. A subscription's own `outbounds` whitelist selects declarations in its downloaded document and rejects updates missing required members.
 * Cycle validation is conservative: it includes all group alternatives, DNS rule targets and known implicit resolver dependencies. It does not prove conditional rules mutually exclusive and may reject an otherwise usable conditional DNS setup. An explicit independent `domain_resolver` makes the bootstrap dependency unambiguous.
 * Member wrappers support TCP/UDP and `preferred_by` queries. Native endpoint ICMP/Flow forwarding interfaces are not forwarded; imported endpoints do not provide every capability of statically configured endpoints.

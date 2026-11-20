@@ -5,6 +5,7 @@ import "github.com/sagernet/sing/common/json/badoption"
 type SelectorOutboundOptions struct {
 	Outbounds                 []string      `json:"outbounds,omitempty" reference:"outbound"`
 	Import                    []GroupImport `json:"import,omitempty"`
+	EmptyFallback             string        `json:"empty_fallback,omitempty" reference:"outbound"`
 	Default                   string        `json:"default,omitempty" reference:"outbound"`
 	InterruptExistConnections bool          `json:"interrupt_exist_connections,omitempty"`
 }
@@ -12,6 +13,7 @@ type SelectorOutboundOptions struct {
 type URLTestOutboundOptions struct {
 	Outbounds                 []string           `json:"outbounds,omitempty" reference:"outbound"`
 	Import                    []GroupImport      `json:"import,omitempty"`
+	EmptyFallback             string             `json:"empty_fallback,omitempty" reference:"outbound"`
 	URL                       string             `json:"url,omitempty"`
 	Interval                  badoption.Duration `json:"interval,omitempty"`
 	Tolerance                 uint16             `json:"tolerance,omitempty"`
