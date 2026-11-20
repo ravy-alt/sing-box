@@ -18,6 +18,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/json/badoption"
 	M "github.com/sagernet/sing/common/metadata"
@@ -449,7 +450,7 @@ func (s *Subscription) listen(ctx context.Context, tag string, destination M.Soc
 		g.release()
 		return nil, err
 	}
-	leased := &leasedPacketConn{PacketConn: conn}
+	leased := &leasedPacketConn{NetPacketConn: bufio.NewPacketConn(conn)}
 	leased.release = func() { stop(); cancel(); g.untrack(leased) }
 	if !g.track(leased) {
 		_ = leased.Close()

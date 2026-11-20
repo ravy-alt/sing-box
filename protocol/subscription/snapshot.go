@@ -200,13 +200,14 @@ func (c *leasedConn) CloseWrite() error {
 
 // Do not expose Upstream: bypassing this wrapper would skip the snapshot lease.
 type leasedPacketConn struct {
-	net.PacketConn
+	// Keep packet methods so domain addresses survive DNS NAT on UDP replies.
+	N.NetPacketConn
 	once    sync.Once
 	release func()
 }
 
 func (c *leasedPacketConn) Close() error {
-	err := c.PacketConn.Close()
+	err := c.NetPacketConn.Close()
 	c.once.Do(func() { release := c.release; c.release = nil; release() })
 	return err
 }
