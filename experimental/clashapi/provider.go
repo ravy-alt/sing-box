@@ -16,7 +16,7 @@ func proxyProviderRouter(server *Server) http.Handler {
 		providers := make(map[string]any)
 		for _, outbound := range server.outbound.Outbounds() {
 			if provider, ok := adapter.SubscriptionFor(outbound); ok {
-				providers[provider.Tag()] = providerInfo(server, provider)
+				providers[adapter.OutboundDisplayName(server.ctx, provider.Tag())] = providerInfo(server, provider)
 			}
 		}
 		render.JSON(w, r, render.M{"providers": providers})
@@ -59,7 +59,7 @@ func providerInfo(server *Server, provider adapter.Subscription) any {
 			proxies = append(proxies, proxyInfo(server, outbound))
 		}
 	}
-	return render.M{"name": status.Name, "type": "Proxy", "vehicleType": "HTTP", "updatedAt": status.UpdatedAt, "ready": status.Ready, "generation": status.Generation, "lastError": status.LastError, "proxies": proxies}
+	return render.M{"name": adapter.OutboundDisplayName(server.ctx, status.Name), "type": "Proxy", "vehicleType": "HTTP", "updatedAt": status.UpdatedAt, "ready": status.Ready, "generation": status.Generation, "lastError": status.LastError, "proxies": proxies}
 }
 
 func parseProviderName(next http.Handler) http.Handler {
@@ -72,7 +72,7 @@ func parseProviderName(next http.Handler) http.Handler {
 func findProviderByName(server *Server) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			outbound, _ := server.outbound.Outbound(r.Context().Value(CtxKeyProviderName).(string))
+			outbound, _ := server.outbound.Outbound(adapter.OutboundControlTag(server.ctx, r.Context().Value(CtxKeyProviderName).(string)))
 			provider, ok := adapter.SubscriptionFor(outbound)
 			if !ok {
 				render.Status(r, http.StatusNotFound)

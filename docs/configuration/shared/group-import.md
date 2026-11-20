@@ -30,6 +30,8 @@ For selectors and URL test groups, at least one of `outbounds`, `import`, or `em
 | `types` | Protocol type or list of types, such as `shadowsocks`, `trojan`, or `selector`. Omitted or empty accepts all types. |
 | `match` | `name` (default) matches the original node name, with the subscription namespace removed and URL escaping decoded. `tag` matches the complete outbound tag. |
 
+Public names omit subscription prefixes and may receive collision suffixes. `match: "name"` still matches the original source name; `match: "tag"` still matches the complete internal identity. Display names and suffix allocation do not change filtering results.
+
 Expressions use Go regular expression syntax and are case sensitive unless they include `(?i)`. Use `^` and `$` for exact matches. Invalid expressions fail configuration validation. Name and type restrictions must both match; filters apply only to members from that import entry.
 
 Explicit members come first, followed by imports in configuration order and each source's member order. Duplicate complete outbound tags are included once, keeping their first position. Nodes with the same original name from different subscriptions remain distinct. Imports preserve existing identities, proxy chains, private DNS, and connection leases; they do not register copies of nodes.

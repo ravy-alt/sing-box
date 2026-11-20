@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/sagernet/sing-box/adapter"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/filemanager"
@@ -23,6 +24,7 @@ type savedSubscription struct {
 	Content   []byte                       `json:"content"`
 	Resources *savedResources              `json:"resources,omitempty"`
 	Imports   map[string]map[string]string `json:"imports,omitempty"`
+	Names     map[string]string            `json:"names,omitempty"`
 }
 
 func (s *Subscription) urlHash() string {
@@ -84,6 +86,7 @@ func (s *Subscription) restoreSaved(saved savedSubscription) error {
 	if err != nil {
 		return err
 	}
+	g.savedNames = saved.Names
 	return s.publish(g, saved.Content, saved.ETag, saved.UpdatedAt)
 }
 
@@ -99,6 +102,7 @@ func (s *Subscription) saveCache() error {
 	}
 	saved := savedSubscription{Version: 1, URLHash: s.urlHash(), ETag: s.etag, UpdatedAt: s.status.UpdatedAt, Content: s.content, Resources: s.current.resources.snapshot(), Imports: s.current.imports}
 	s.mu.Unlock()
+	saved.Names = s.savedNames()
 	if parent := service.PtrFromContext[resourceCache](s.ctx); parent != nil {
 		parent.saveSubscription(s.Tag(), saved)
 	}
@@ -133,4 +137,14 @@ func (s *Subscription) saveCache() error {
 		return err
 	}
 	return os.Rename(file.Name(), path)
+}
+
+func (s *Subscription) savedNames() map[string]string {
+	names := adapter.OutboundNamesFromContext(s.ctx).Snapshot()
+	for tag := range names {
+		if !ownsMember(s.Tag(), tag) {
+			delete(names, tag)
+		}
+	}
+	return names
 }

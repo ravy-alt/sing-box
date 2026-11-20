@@ -599,14 +599,14 @@ func (s *StartedService) readGroups() *Groups {
 	var gs Groups
 	for _, iGroup := range iGroups {
 		var g Group
-		g.Tag = iGroup.Tag()
+		g.Tag = adapter.OutboundDisplayName(boxService.ctx, iGroup.Tag())
 		g.Type = iGroup.Type()
 		_, g.Selectable = iGroup.(adapter.SelectableOutboundGroup)
 		if selected := iGroup.Selected(N.NetworkTCP); selected != nil {
-			g.Selected = selected.Tag()
+			g.Selected = adapter.OutboundDisplayName(boxService.ctx, selected.Tag())
 		}
 		if boxService.cacheFile != nil {
-			if isExpand, loaded := boxService.cacheFile.LoadGroupExpand(g.Tag); loaded {
+			if isExpand, loaded := boxService.cacheFile.LoadGroupExpand(iGroup.Tag()); loaded {
 				g.IsExpand = isExpand
 			}
 		}
@@ -618,7 +618,7 @@ func (s *StartedService) readGroups() *Groups {
 			}
 
 			var item GroupItem
-			item.Tag = itemTag
+			item.Tag = adapter.OutboundDisplayName(boxService.ctx, itemTag)
 			item.Type = itemOutbound.Type()
 			if history := historyStorage.LoadURLTestHistory(group.RealTag(itemOutbound, N.NetworkTCP)); history != nil {
 				item.UrlTestTime = history.Time.Unix()
@@ -722,7 +722,7 @@ func (s *StartedService) URLTest(ctx context.Context, request *URLTestRequest) (
 	}
 	boxService := s.instance
 	s.serviceAccess.RUnlock()
-	outboundTag := request.OutboundTag
+	outboundTag := adapter.OutboundControlTag(boxService.ctx, request.OutboundTag)
 	outbound, isLoaded := boxService.outboundManager.Outbound(outboundTag)
 	if !isLoaded {
 		return nil, status.Error(codes.NotFound, "outbound not found: "+outboundTag)
@@ -761,7 +761,7 @@ func (s *StartedService) SelectOutbound(ctx context.Context, request *SelectOutb
 	if boxService == nil {
 		return nil, os.ErrInvalid
 	}
-	outboundGroup, isLoaded := boxService.outboundManager.Outbound(request.GroupTag)
+	outboundGroup, isLoaded := boxService.outboundManager.Outbound(adapter.OutboundControlTag(boxService.ctx, request.GroupTag))
 	if !isLoaded {
 		return nil, status.Error(codes.NotFound, "selector not found: "+request.GroupTag)
 	}
@@ -770,7 +770,7 @@ func (s *StartedService) SelectOutbound(ctx context.Context, request *SelectOutb
 	if !isSelector {
 		return nil, status.Error(codes.InvalidArgument, "outbound is not a selector: "+request.GroupTag)
 	}
-	if !selector.SelectOutbound(request.OutboundTag) {
+	if !selector.SelectOutbound(adapter.OutboundControlTag(boxService.ctx, request.OutboundTag)) {
 		return nil, status.Error(codes.NotFound, "outbound not found in selector: "+request.OutboundTag)
 	}
 	return &emptypb.Empty{}, nil
@@ -784,7 +784,7 @@ func (s *StartedService) SetGroupExpand(ctx context.Context, request *SetGroupEx
 	}
 	boxService := s.instance
 	if boxService.cacheFile != nil {
-		err := boxService.cacheFile.StoreGroupExpand(request.GroupTag, request.IsExpand)
+		err := boxService.cacheFile.StoreGroupExpand(adapter.OutboundControlTag(boxService.ctx, request.GroupTag), request.IsExpand)
 		if err != nil {
 			return nil, err
 		}
@@ -815,7 +815,7 @@ func (s *StartedService) SubscribeConnections(request *SubscribeConnectionsReque
 	connectionSnapshots := make(map[uuid.UUID]connectionSnapshot)
 	initialEvents := s.buildInitialConnectionState(trafficManager, connectionSnapshots)
 	err = server.Send(&ConnectionEvents{
-		Events: initialEvents,
+		Events: displayConnectionEvents(boxService.ctx, initialEvents),
 		Reset_: true,
 	})
 	if err != nil {
@@ -855,7 +855,7 @@ func (s *StartedService) SubscribeConnections(request *SubscribeConnectionsReque
 				}
 			}
 			if len(pendingEvents) > 0 {
-				err = server.Send(&ConnectionEvents{Events: pendingEvents})
+				err = server.Send(&ConnectionEvents{Events: displayConnectionEvents(boxService.ctx, pendingEvents)})
 				if err != nil {
 					return err
 				}
@@ -866,7 +866,7 @@ func (s *StartedService) SubscribeConnections(request *SubscribeConnectionsReque
 			if len(protoEvents) == 0 {
 				continue
 			}
-			err = server.Send(&ConnectionEvents{Events: protoEvents})
+			err = server.Send(&ConnectionEvents{Events: displayConnectionEvents(boxService.ctx, protoEvents)})
 			if err != nil {
 				return err
 			}
@@ -878,6 +878,17 @@ type connectionSnapshot struct {
 	uplink     int64
 	downlink   int64
 	hadTraffic bool
+}
+
+func displayConnectionEvents(ctx context.Context, events []*ConnectionEvent) []*ConnectionEvent {
+	for _, event := range events {
+		if conn := event.Connection; conn != nil {
+			conn.Outbound = adapter.OutboundDisplayName(ctx, conn.Outbound)
+			conn.FromOutbound = adapter.OutboundDisplayName(ctx, conn.FromOutbound)
+			conn.ChainList = adapter.OutboundDisplayNames(ctx, conn.ChainList)
+		}
+	}
+	return events
 }
 
 func (s *StartedService) buildInitialConnectionState(manager *trafficcontrol.Manager, snapshots map[uuid.UUID]connectionSnapshot) []*ConnectionEvent {
@@ -1178,7 +1189,7 @@ func (s *StartedService) SubscribeOutbounds(_ *emptypb.Empty, server grpc.Server
 			historyStorage := boxService.urlTestHistoryStorage
 			for _, ob := range boxService.outboundManager.Outbounds() {
 				item := &GroupItem{
-					Tag:  ob.Tag(),
+					Tag:  adapter.OutboundDisplayName(boxService.ctx, ob.Tag()),
 					Type: ob.Type(),
 				}
 				if history := historyStorage.LoadURLTestHistory(group.RealTag(ob, N.NetworkTCP)); history != nil {
@@ -1189,7 +1200,7 @@ func (s *StartedService) SubscribeOutbounds(_ *emptypb.Empty, server grpc.Server
 			}
 			for _, ep := range boxService.endpointManager.Endpoints() {
 				item := &GroupItem{
-					Tag:  ep.Tag(),
+					Tag:  adapter.OutboundDisplayName(boxService.ctx, ep.Tag()),
 					Type: ep.Type(),
 				}
 				if history := historyStorage.LoadURLTestHistory(group.RealTag(ep, N.NetworkTCP)); history != nil {
@@ -1251,6 +1262,7 @@ func resolveOutbound(instance *Instance, tag string) (adapter.Outbound, error) {
 	if tag == "" {
 		return instance.outboundManager.Default(), nil
 	}
+	tag = adapter.OutboundControlTag(instance.ctx, tag)
 	outbound, loaded := instance.outboundManager.Outbound(tag)
 	if !loaded {
 		return nil, status.Error(codes.NotFound, "outbound not found: "+tag)

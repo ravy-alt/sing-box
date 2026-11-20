@@ -29,7 +29,7 @@ func connectionRouter(ctx context.Context, network adapter.NetworkManager, traff
 	return r
 }
 
-func connectionsSnapshot(trafficManager *trafficcontrol.Manager) render.M {
+func connectionsSnapshot(ctx context.Context, trafficManager *trafficcontrol.Manager) render.M {
 	uplinkTotal, downlinkTotal := trafficManager.Total()
 	connections := common.Filter(trafficManager.Connections(), func(metadata *trafficcontrol.TrackerMetadata) bool {
 		return metadata.OutboundType != C.TypeDNS
@@ -38,7 +38,9 @@ func connectionsSnapshot(trafficManager *trafficcontrol.Manager) render.M {
 		"downloadTotal": downlinkTotal,
 		"uploadTotal":   uplinkTotal,
 		"connections": common.Map(connections, func(metadata *trafficcontrol.TrackerMetadata) connectionObject {
-			return connectionObject(*metadata)
+			result := connectionObject(*metadata)
+			result.Chain = adapter.OutboundDisplayNames(ctx, metadata.Chain)
+			return result
 		}),
 		"memory": inuseMemory(),
 	}
@@ -107,7 +109,7 @@ func (c connectionObject) MarshalJSON() ([]byte, error) {
 func getConnections(ctx context.Context, trafficManager *trafficcontrol.Manager) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Upgrade") != "websocket" {
-			render.JSON(w, r, connectionsSnapshot(trafficManager))
+			render.JSON(w, r, connectionsSnapshot(ctx, trafficManager))
 			return
 		}
 
@@ -133,7 +135,7 @@ func getConnections(ctx context.Context, trafficManager *trafficcontrol.Manager)
 		buf := &bytes.Buffer{}
 		sendSnapshot := func() error {
 			buf.Reset()
-			encodeErr := json.NewEncoder(buf).Encode(connectionsSnapshot(trafficManager))
+			encodeErr := json.NewEncoder(buf).Encode(connectionsSnapshot(ctx, trafficManager))
 			if encodeErr != nil {
 				return encodeErr
 			}

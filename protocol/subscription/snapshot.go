@@ -36,6 +36,7 @@ type snapshot struct {
 	children       []*Subscription
 	dependencies   map[string][]string
 	imports        map[string]map[string]string
+	savedNames     map[string]string
 	scope          *adapter.Scope
 	outbounds      adapter.OutboundManager
 	endpoints      adapter.EndpointManager

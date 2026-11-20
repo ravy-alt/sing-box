@@ -93,7 +93,13 @@ This imports nodes and their dependencies. Source global inbounds, traffic route
 
 Nested subscriptions use the same download, bootstrap, cache and rollback mechanisms. Repeating a subscription URL in its ancestor chain is rejected. Parent refresh builds a new resource tree; a child can also refresh independently. Inside a source document, `subscription/child/exit` references a child member and is recursively namespaced on import. Child and rule-set updates persist into the parent cache, allowing the committed tree to restart offline with just the parent cache. Imported selector choices are retained across refresh and cache restoration when still valid.
 
-Members use `subscription/<escaped-group-tag>/<escaped-node-tag>`. For example, `sub`'s `exit` is `subscription/sub/exit`; `exit` in its child subscription `child` is `subscription/subscription%2Fsub%2Fchild/exit`. Selector and URL test `outbounds` lists cannot directly reference these members from another subscription document. Use `import` to obtain members, or reference a subscription group declared in the current document through `outbounds`. Routing, including `route.final`, can still reference stable member tags directly; a removed member fails explicitly. Referencing the subscription group instead allows the group to apply its selection fallback.
+Clash API, the native API and client interfaces prefer the original node or group name from the subscription. Chinese text, spaces and special characters remain readable. When a name conflicts with a static configuration tag or another subscription member, `-1`, `-2`, and subsequent suffixes are tried until a free name is found. Static tags keep priority, and new original names in the same publication are reserved before generated suffixes.
+
+Names are bound to internal identities. Refreshes, configuration changes to a same-tag node, and removal followed by reintroduction retain the assigned name. Retired names remain reserved rather than being reassigned to a different node. Assignments are stored in subscription caches; restoring those caches preserves suffixes. Without a cache, a new process allocates from its current configuration, loading order and membership. A rejected parent update does not reserve names from candidate children. Duplicate original tags within a single source document remain invalid native configuration.
+
+Group lists, current selections, test results, provider lists and connection chains share these names. Control requests use names returned by the API. HTTP path escaping is still applied once for transport, not included in displayed names. Configuration references, filters and proxy chains continue using the stable identities described below.
+
+Members retain internal stable identities of the form `subscription/<escaped-group-tag>/<escaped-node-tag>`. For example, `sub`'s `exit` is `subscription/sub/exit`; `exit` in its child subscription `child` is `subscription/subscription%2Fsub%2Fchild/exit`. Selector and URL test `outbounds` lists cannot directly reference these members from another subscription document. Use `import` to obtain members, or reference a subscription group declared in the current document through `outbounds`. Routing, including `route.final`, can still reference stable member tags directly; a removed member fails explicitly. Referencing the subscription group instead allows the group to apply its selection fallback.
 
 The Clash API and daemon group APIs expose imported groups for inspection and selection. Provider APIs also expose nested subscriptions. Encode the complete name again when using it as an HTTP path parameter. Administrative handles resolve the active generation while traffic retains connection leases.
 
@@ -146,6 +152,6 @@ Inline DNS rules are active during bootstrap. Remote rule-sets are loaded afterw
 * `GET /providers/proxies/{name}`: readiness, generation, last update, last error and members.
 * `PUT /providers/proxies/{name}`: refresh and wait for completion.
 * `GET /providers/proxies/{name}/healthcheck`: run a group health check.
-* `PUT /proxies/{name}` with `{"name":"subscription/<group>/<node>"}`: select a member.
+* `PUT /proxies/{name}` with `{"name":"Hong Kong-1"}`: select a member using its name returned by the API.
 
 The existing Clash API authentication applies. Concurrent updates to one subscription are serialized; old health-check results cannot change a newer generation's selection.

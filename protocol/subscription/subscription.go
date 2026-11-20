@@ -608,6 +608,7 @@ func (s *Subscription) publish(g *snapshot, content []byte, etag string, updated
 		g.close()
 		return net.ErrClosed
 	}
+	s.publishNames(g)
 	old := s.current
 	if old == nil {
 		if cache := adapter.SelectionCacheFromContext(s.ctx); cache != nil {

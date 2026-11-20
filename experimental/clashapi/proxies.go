@@ -29,7 +29,7 @@ func proxyRouter(server *Server, router adapter.Router) http.Handler {
 		r.Use(parseProxyName, findProxyByName(server))
 		r.Get("/", getProxy(server))
 		r.Get("/delay", getProxyDelay(server))
-		r.Put("/", updateProxy)
+		r.Put("/", updateProxy(server))
 	})
 	return r
 }
@@ -45,7 +45,7 @@ func parseProxyName(next http.Handler) http.Handler {
 func findProxyByName(server *Server) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			name := r.Context().Value(CtxKeyProxyName).(string)
+			name := adapter.OutboundControlTag(server.ctx, r.Context().Value(CtxKeyProxyName).(string))
 			proxy, exist := server.outbound.Outbound(name)
 			if !exist {
 				render.Status(r, http.StatusNotFound)
@@ -68,7 +68,7 @@ func proxyInfo(server *Server, detour adapter.Outbound) *badjson.JSONObject {
 		clashType = C.ProxyDisplayName(detour.Type())
 	}
 	info.Put("type", clashType)
-	info.Put("name", detour.Tag())
+	info.Put("name", adapter.OutboundDisplayName(server.ctx, detour.Tag()))
 	info.Put("udp", common.Contains(detour.Network(), N.NetworkUDP))
 	delayHistory := server.urlTestHistory.LoadURLTestHistory(group.RealTag(detour, N.NetworkTCP))
 	if delayHistory != nil {
@@ -79,10 +79,10 @@ func proxyInfo(server *Server, detour adapter.Outbound) *badjson.JSONObject {
 	if group, isGroup := adapter.OutboundGroupFor(detour); isGroup {
 		var now string
 		if selected := group.Selected(N.NetworkTCP); selected != nil {
-			now = selected.Tag()
+			now = adapter.OutboundDisplayName(server.ctx, selected.Tag())
 		}
 		info.Put("now", now)
-		info.Put("all", group.All())
+		info.Put("all", adapter.OutboundDisplayNames(server.ctx, group.All()))
 	}
 	return &info
 }
@@ -106,10 +106,10 @@ func getProxies(server *Server) func(w http.ResponseWriter, r *http.Request) {
 			case C.TypeDirect, C.TypeBlock, C.TypeDNS:
 				continue
 			}
-			allProxies = append(allProxies, detour.Tag())
+			allProxies = append(allProxies, adapter.OutboundDisplayName(server.ctx, detour.Tag()))
 		}
 
-		defaultTag := server.outbound.Default().Tag()
+		defaultTag := adapter.OutboundDisplayName(server.ctx, server.outbound.Default().Tag())
 
 		sort.SliceStable(allProxies, func(i, j int) bool {
 			return allProxies[i] == defaultTag
@@ -130,7 +130,7 @@ func getProxies(server *Server) func(w http.ResponseWriter, r *http.Request) {
 			if detour.Tag() == "" {
 				tag = F.ToString(i)
 			} else {
-				tag = detour.Tag()
+				tag = adapter.OutboundDisplayName(server.ctx, detour.Tag())
 			}
 			proxyMap.Put(tag, proxyInfo(server, detour))
 		}
@@ -163,30 +163,32 @@ type UpdateProxyRequest struct {
 	Name string `json:"name"`
 }
 
-func updateProxy(w http.ResponseWriter, r *http.Request) {
-	req := UpdateProxyRequest{}
-	if err := render.DecodeJSON(r.Body, &req); err != nil {
-		render.Status(r, http.StatusBadRequest)
-		render.JSON(w, r, ErrBadRequest)
-		return
-	}
+func updateProxy(server *Server) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		req := UpdateProxyRequest{}
+		if err := render.DecodeJSON(r.Body, &req); err != nil {
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, ErrBadRequest)
+			return
+		}
 
-	proxy := r.Context().Value(CtxKeyProxy).(adapter.Outbound)
-	control, _ := adapter.OutboundGroupFor(proxy)
-	selector, ok := control.(adapter.SelectableOutboundGroup)
-	if !ok {
-		render.Status(r, http.StatusBadRequest)
-		render.JSON(w, r, newError("Must be a Selector"))
-		return
-	}
+		proxy := r.Context().Value(CtxKeyProxy).(adapter.Outbound)
+		control, _ := adapter.OutboundGroupFor(proxy)
+		selector, ok := control.(adapter.SelectableOutboundGroup)
+		if !ok {
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, newError("Must be a Selector"))
+			return
+		}
 
-	if !selector.SelectOutbound(req.Name) {
-		render.Status(r, http.StatusBadRequest)
-		render.JSON(w, r, newError("Selector update error: not found"))
-		return
-	}
+		if !selector.SelectOutbound(adapter.OutboundControlTag(server.ctx, req.Name)) {
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, newError("Selector update error: not found"))
+			return
+		}
 
-	render.NoContent(w, r)
+		render.NoContent(w, r)
+	}
 }
 
 func groupContains(outboundManager adapter.OutboundManager, outboundGroup adapter.OutboundGroup, tag string, visited map[string]bool) bool {

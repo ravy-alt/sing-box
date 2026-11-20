@@ -95,6 +95,10 @@ func getGroupDelay(server *Server) func(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		render.JSON(w, r, result)
+		namedResult := make(map[string]uint16, len(result))
+		for tag, delay := range result {
+			namedResult[adapter.OutboundDisplayName(server.ctx, tag)] = delay
+		}
+		render.JSON(w, r, namedResult)
 	}
 }

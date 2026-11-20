@@ -119,6 +119,22 @@ func New(options Options) (*Box, error) {
 	ctx = service.ContextWithDefaultRegistry(ctx)
 	service.MustRegisterPtr(ctx, &adapter.SubscriptionHostOptions{Options: options.Options})
 	service.MustRegisterPtr(ctx, adapter.NewGroupUpdates())
+	var staticOutboundTags []string
+	for i, outbound := range options.Outbounds {
+		tag := outbound.Tag
+		if tag == "" {
+			tag = F.ToString(i)
+		}
+		staticOutboundTags = append(staticOutboundTags, tag)
+	}
+	for i, endpoint := range options.Endpoints {
+		tag := endpoint.Tag
+		if tag == "" {
+			tag = F.ToString(i)
+		}
+		staticOutboundTags = append(staticOutboundTags, tag)
+	}
+	service.MustRegisterPtr(ctx, adapter.NewOutboundNames(staticOutboundTags))
 
 	endpointRegistry := service.FromContext[adapter.EndpointRegistry](ctx)
 	inboundRegistry := service.FromContext[adapter.InboundRegistry](ctx)
