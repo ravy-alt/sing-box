@@ -46,7 +46,7 @@ type RemoteRuleSet struct {
 	content        atomic.Pointer[ruleSetContent]
 	lastUpdated    time.Time
 	lastEtag       string
-	cacheFile      adapter.CacheFile
+	cacheFile      adapter.RuleSetCache
 	pauseManager   pause.Manager
 	access         sync.Mutex
 	callbacks      list.List[adapter.RuleSetUpdateCallback]
@@ -93,7 +93,10 @@ func (s *RemoteRuleSet) String() string {
 }
 
 func (s *RemoteRuleSet) StartContext(ctx context.Context, startContext *adapter.HTTPStartContext) error {
-	s.cacheFile = service.FromContext[adapter.CacheFile](s.ctx)
+	s.cacheFile = service.FromContext[adapter.RuleSetCache](s.ctx)
+	if s.cacheFile == nil {
+		s.cacheFile = service.FromContext[adapter.CacheFile](s.ctx)
+	}
 	transport, err := s.resolveTransport()
 	if err != nil {
 		return E.Cause(err, "create rule-set http client")

@@ -52,6 +52,20 @@ func (h *Outbound) UnmarshalJSONContext(ctx context.Context, content []byte) err
 	if err != nil {
 		return err
 	}
+	if subscription, ok := options.(*SubscriptionOutboundOptions); ok {
+		// The generic object merger omits empty objects. For subscription clients,
+		// an explicit {} means direct dialing, whereas absence inherits the host
+		// default client. Preserve that distinction, especially for bootstrapping.
+		var clients struct {
+			HTTPClient          *HTTPClientOptions `json:"http_client"`
+			BootstrapHTTPClient *HTTPClientOptions `json:"bootstrap_http_client"`
+		}
+		if err = json.Unmarshal(content, &clients); err != nil {
+			return err
+		}
+		subscription.HTTPClient = clients.HTTPClient
+		subscription.BootstrapHTTPClient = clients.BootstrapHTTPClient
+	}
 	if listenWrapper, isListen := options.(ListenOptionsWrapper); isListen {
 		//nolint:staticcheck
 		if listenWrapper.TakeListenOptions().InboundOptions != (InboundOptions{}) {

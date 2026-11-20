@@ -42,7 +42,9 @@ func (m *Manager) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 	m.access.Lock()
 	if stage == adapter.StartStateInitialize {
 		if m.defaultTag != "" && m.defaultOutbound == nil {
-			defaultEndpoint, loaded := m.endpoint.Get(m.defaultTag)
+			m.access.Unlock()
+			defaultEndpoint, loaded := m.Outbound(m.defaultTag)
+			m.access.Lock()
 			if !loaded {
 				m.access.Unlock()
 				return E.New("default outbound not found: ", m.defaultTag)
@@ -92,6 +94,11 @@ func (m *Manager) startOutbounds(scope *adapter.Scope, outbounds []adapter.Outbo
 			dependencies := outboundToStart.Dependencies()
 			for _, dependency := range dependencies {
 				if !started[dependency] {
+					if provided, found := m.Outbound(dependency); found {
+						if member, ok := provided.(adapter.ProvidedOutbound); ok && started[member.ProviderTag()] {
+							continue
+						}
+					}
 					continue startOne
 				}
 			}
@@ -146,8 +153,14 @@ func (m *Manager) startOutbounds(scope *adapter.Scope, outbounds []adapter.Outbo
 
 func (m *Manager) Outbounds() []adapter.Outbound {
 	m.access.RLock()
-	defer m.access.RUnlock()
-	return m.outbounds
+	outbounds := append([]adapter.Outbound(nil), m.outbounds...)
+	m.access.RUnlock()
+	for _, outbound := range append([]adapter.Outbound(nil), outbounds...) {
+		if provider, ok := outbound.(adapter.OutboundProvider); ok {
+			outbounds = append(outbounds, provider.ProviderOutbounds()...)
+		}
+	}
+	return outbounds
 }
 
 func (m *Manager) Outbound(tag string) (adapter.Outbound, bool) {
@@ -156,6 +169,16 @@ func (m *Manager) Outbound(tag string) (adapter.Outbound, bool) {
 	m.access.RUnlock()
 	if found {
 		return outbound, true
+	}
+	m.access.RLock()
+	outbounds := append([]adapter.Outbound(nil), m.outbounds...)
+	m.access.RUnlock()
+	for _, outbound := range outbounds {
+		if provider, ok := outbound.(adapter.OutboundProvider); ok {
+			if member, loaded := provider.ProviderOutbound(tag); loaded {
+				return member, true
+			}
+		}
 	}
 	return m.endpoint.Get(tag)
 }

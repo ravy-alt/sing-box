@@ -1,0 +1,156 @@
+package adapter
+
+import (
+	"context"
+	"time"
+
+	"github.com/sagernet/sing-box/option"
+	E "github.com/sagernet/sing/common/exceptions"
+	"github.com/sagernet/sing/service"
+)
+
+// SubscriptionHostOptions supplies immutable static dependencies for validating
+// a dynamic provider update against the rest of the running configuration.
+type SubscriptionHostOptions struct{ Options option.Options }
+
+type SelectableOutboundGroup interface {
+	OutboundGroup
+	SelectOutbound(tag string) bool
+}
+
+// OutboundProvider exposes namespaced, stable handles, never its live implementation objects.
+type OutboundProvider interface {
+	ProviderOutbounds() []Outbound
+	ProviderOutbound(tag string) (Outbound, bool)
+}
+
+// ProvidedOutbound is a stable handle that can be resolved before its first
+// snapshot is loaded. The provider, rather than the member, has a lifecycle.
+type ProvidedOutbound interface {
+	Outbound
+	ProviderTag() string
+	Available() bool
+}
+
+type SubscriptionStatus struct {
+	Name       string    `json:"name"`
+	Ready      bool      `json:"ready"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+	LastError  string    `json:"lastError,omitempty"`
+	Generation uint64    `json:"generation"`
+}
+
+type Subscription interface {
+	OutboundGroup
+	OutboundProvider
+	URLTestGroup
+	Restore() error
+	Refresh(context.Context) error
+	Status() SubscriptionStatus
+}
+
+// InitializeSubscriptions restores every cache before attempting network access. A
+// successful pass can make another subscription's download path available.
+type SubscriptionBootstrapTask struct {
+	Name string
+	Run  func(context.Context) error
+}
+
+func InitializeSubscriptions(ctx context.Context, manager OutboundManager, tasks ...SubscriptionBootstrapTask) error {
+	return initializeSubscriptions(ctx, manager, false, tasks...)
+}
+
+// Candidate scopes may refer to another provider that has not loaded yet. The
+// complete tree is checked strictly before publishing an update or serving traffic.
+func InitializeSubscriptionScope(ctx context.Context, manager OutboundManager, tasks ...SubscriptionBootstrapTask) error {
+	return initializeSubscriptions(ctx, manager, true, tasks...)
+}
+
+func initializeSubscriptions(ctx context.Context, manager OutboundManager, allowPending bool, tasks ...SubscriptionBootstrapTask) error {
+	pending := append([]SubscriptionBootstrapTask(nil), tasks...)
+	for _, outbound := range manager.Outbounds() {
+		if subscription, ok := outbound.(Subscription); ok {
+			_ = subscription.Restore() // Refresh reports the final error if no cache works.
+			if !subscription.Status().Ready {
+				pending = append(pending, SubscriptionBootstrapTask{subscription.Tag(), subscription.Refresh})
+			}
+		}
+	}
+	for len(pending) > 0 {
+		var next []SubscriptionBootstrapTask
+		var failures []error
+		for _, task := range pending {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := task.Run(ctx); err != nil {
+				next = append(next, task)
+				failures = append(failures, E.Cause(err, "subscription resource[", task.Name, "]"))
+			}
+		}
+		if len(next) == len(pending) {
+			return E.Cause(E.Errors(failures...), "initialize subscriptions: provide a usable cache or bootstrap_http_client independent of the unavailable subscription groups")
+		}
+		pending = next
+	}
+	return ValidateSubscriptionDependencies(ctx, manager, allowPending)
+}
+
+func ValidateSubscriptionDependencies(ctx context.Context, manager OutboundManager, allowPending bool) error {
+	outbounds := manager.Outbounds()
+	if endpoints := service.FromContext[EndpointManager](ctx); endpoints != nil {
+		for _, endpoint := range endpoints.Endpoints() {
+			outbounds = append(outbounds, endpoint)
+		}
+	}
+	for _, outbound := range outbounds {
+		if validator, ok := outbound.(GroupImportValidator); ok {
+			if err := validator.ValidateImports(allowPending); err != nil {
+				return E.Cause(err, "group[", outbound.Tag(), "]")
+			}
+		}
+		for _, tag := range outbound.Dependencies() {
+			if imports, ok := outbound.(OptionalGroupImport); ok && imports.OptionalImportDependency(tag) {
+				continue
+			}
+			dependency, found := manager.Outbound(tag)
+			if !found {
+				return E.New("subscription dependency not found: ", tag, " for ", outbound.Tag())
+			}
+			if provided, ok := dependency.(ProvidedOutbound); ok && !provided.Available() && !allowPending {
+				return E.New("subscription member not found: ", tag, " for ", outbound.Tag())
+			}
+		}
+	}
+	if provided, ok := manager.Default().(ProvidedOutbound); ok && !provided.Available() && !allowPending {
+		return E.New("default subscription member not found: ", provided.Tag())
+	}
+	return nil
+}
+
+// OutboundControl exposes administrative views without letting routing unwrap a
+// provider's connection leases. Never use these views to route traffic.
+type OutboundControl interface {
+	GroupControl() (OutboundGroup, bool)
+	SubscriptionControl() (Subscription, bool)
+}
+
+func OutboundGroupFor(outbound Outbound) (OutboundGroup, bool) {
+	if group, ok := outbound.(OutboundGroup); ok {
+		return group, true
+	}
+	if control, ok := outbound.(OutboundControl); ok {
+		return control.GroupControl()
+	}
+	return nil, false
+}
+
+func SubscriptionFor(outbound Outbound) (Subscription, bool) {
+	if subscription, ok := outbound.(Subscription); ok {
+		return subscription, true
+	}
+	if control, ok := outbound.(OutboundControl); ok {
+		return control.SubscriptionControl()
+	}
+	return nil, false
+}

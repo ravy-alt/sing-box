@@ -592,7 +592,7 @@ func (s *StartedService) readGroups() *Groups {
 	outbounds := boxService.outboundManager.Outbounds()
 	var iGroups []adapter.OutboundGroup
 	for _, it := range outbounds {
-		if group, isGroup := it.(adapter.OutboundGroup); isGroup {
+		if group, isGroup := adapter.OutboundGroupFor(it); isGroup {
 			iGroups = append(iGroups, group)
 		}
 	}
@@ -601,7 +601,7 @@ func (s *StartedService) readGroups() *Groups {
 		var g Group
 		g.Tag = iGroup.Tag()
 		g.Type = iGroup.Type()
-		_, g.Selectable = iGroup.(*group.Selector)
+		_, g.Selectable = iGroup.(adapter.SelectableOutboundGroup)
 		if selected := iGroup.Selected(N.NetworkTCP); selected != nil {
 			g.Selected = selected.Tag()
 		}
@@ -729,7 +729,7 @@ func (s *StartedService) URLTest(ctx context.Context, request *URLTestRequest) (
 	}
 	historyStorage := boxService.urlTestHistoryStorage
 	urlTest, isURLTest := outbound.(*group.URLTest)
-	outboundGroup, isOutboundGroup := outbound.(adapter.OutboundGroup)
+	outboundGroup, isOutboundGroup := adapter.OutboundGroupFor(outbound)
 	if isURLTest {
 		go urlTest.CheckOutbounds()
 	} else if isOutboundGroup {
@@ -765,7 +765,8 @@ func (s *StartedService) SelectOutbound(ctx context.Context, request *SelectOutb
 	if !isLoaded {
 		return nil, status.Error(codes.NotFound, "selector not found: "+request.GroupTag)
 	}
-	selector, isSelector := outboundGroup.(*group.Selector)
+	control, _ := adapter.OutboundGroupFor(outboundGroup)
+	selector, isSelector := control.(adapter.SelectableOutboundGroup)
 	if !isSelector {
 		return nil, status.Error(codes.InvalidArgument, "outbound is not a selector: "+request.GroupTag)
 	}

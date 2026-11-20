@@ -131,6 +131,7 @@ nav:
           - Dial Fields: configuration/shared/dial.md
           - TLS: configuration/shared/tls.md
           - HTTP Client: configuration/shared/http-client.md
+          - Group Imports: configuration/shared/group-import.md
           - HTTP2 Fields: configuration/shared/http2.md
           - QUIC Fields: configuration/shared/quic.md
           - Certificate Provider:
@@ -203,6 +204,7 @@ nav:
           - DNS: configuration/outbound/dns.md
           - Selector: configuration/outbound/selector.md
           - URLTest: configuration/outbound/urltest.md
+          - Subscription: configuration/outbound/subscription.md
       - Service:
           - configuration/service/index.md
           - sing-box API: configuration/service/api.md

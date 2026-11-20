@@ -33,6 +33,7 @@ import (
 	"github.com/sagernet/sing-box/protocol/snell"
 	"github.com/sagernet/sing-box/protocol/socks"
 	"github.com/sagernet/sing-box/protocol/ssh"
+	"github.com/sagernet/sing-box/protocol/subscription"
 	"github.com/sagernet/sing-box/protocol/tor"
 	"github.com/sagernet/sing-box/protocol/trojan"
 	"github.com/sagernet/sing-box/protocol/tun"
@@ -87,6 +88,7 @@ func OutboundRegistry() *outbound.Registry {
 
 	group.RegisterSelector(registry)
 	group.RegisterURLTest(registry)
+	subscription.RegisterOutbound(registry)
 
 	socks.RegisterOutbound(registry)
 	http.RegisterOutbound(registry)

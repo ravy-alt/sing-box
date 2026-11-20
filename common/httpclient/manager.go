@@ -61,7 +61,40 @@ func (m *Manager) Name() string {
 	return "http-client"
 }
 
+func (m *Manager) HasClient(tag string) bool {
+	_, found := m.defines[tag]
+	return found
+}
+
+func (m *Manager) NewDownloadTransport(ctx context.Context, logger logger.ContextLogger, options *option.HTTPClientOptions) (adapter.HTTPTransport, func() error, error) {
+	var resolved option.HTTPClientOptions
+	if options != nil {
+		resolved = *options
+	} else if m.defaultTag != "" {
+		resolved.Tag = m.defaultTag
+	} else {
+		resolved.DefaultOutbound = true
+	}
+	tag := resolved.Tag
+	if tag != "" {
+		define, loaded := m.defines[tag]
+		if !loaded {
+			return nil, nil, E.New("http_client not found: ", tag)
+		}
+		resolved = define.Options()
+	}
+	transport, err := NewTransport(ctx, logger, tag, resolved)
+	if err != nil {
+		return nil, nil, err
+	}
+	return transport, transport.close, nil
+}
+
 func (m *Manager) Start(stage adapter.StartStage, scope *adapter.Scope) error {
+	if stage == adapter.StartStateInitialize {
+		scope.Add(m.close)
+		return nil
+	}
 	if stage != adapter.StartStateStart {
 		return nil
 	}
@@ -72,7 +105,6 @@ func (m *Manager) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 		}
 		m.defaultTransport = sharedTransport
 	}
-	scope.Add(m.close)
 	return nil
 }
 

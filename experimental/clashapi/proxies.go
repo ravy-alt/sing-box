@@ -76,7 +76,7 @@ func proxyInfo(server *Server, detour adapter.Outbound) *badjson.JSONObject {
 	} else {
 		info.Put("history", []*adapter.URLTestHistory{})
 	}
-	if group, isGroup := detour.(adapter.OutboundGroup); isGroup {
+	if group, isGroup := adapter.OutboundGroupFor(detour); isGroup {
 		var now string
 		if selected := group.Selected(N.NetworkTCP); selected != nil {
 			now = selected.Tag()
@@ -172,7 +172,8 @@ func updateProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxy := r.Context().Value(CtxKeyProxy).(adapter.Outbound)
-	selector, ok := proxy.(*group.Selector)
+	control, _ := adapter.OutboundGroupFor(proxy)
+	selector, ok := control.(adapter.SelectableOutboundGroup)
 	if !ok {
 		render.Status(r, http.StatusBadRequest)
 		render.JSON(w, r, newError("Must be a Selector"))
@@ -200,7 +201,7 @@ func groupContains(outboundManager adapter.OutboundManager, outboundGroup adapte
 		if group.RealTag(member, N.NetworkTCP) == tag {
 			return true
 		}
-		memberGroup, isGroup := member.(adapter.OutboundGroup)
+		memberGroup, isGroup := adapter.OutboundGroupFor(member)
 		if !isGroup || visited[memberTag] {
 			continue
 		}
@@ -242,7 +243,8 @@ func getProxyDelay(server *Server) func(w http.ResponseWriter, r *http.Request) 
 				})
 			}
 			for _, detour := range server.outbound.Outbounds() {
-				urlTestGroup, isURLTestGroup := detour.(adapter.URLTestGroup)
+				control, _ := adapter.OutboundGroupFor(detour)
+				urlTestGroup, isURLTestGroup := control.(adapter.URLTestGroup)
 				if !isURLTestGroup {
 					continue
 				}

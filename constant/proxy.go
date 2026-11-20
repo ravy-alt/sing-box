@@ -46,8 +46,9 @@ const (
 )
 
 const (
-	TypeSelector = "selector"
-	TypeURLTest  = "urltest"
+	TypeSelector     = "selector"
+	TypeSubscription = "subscription"
+	TypeURLTest      = "urltest"
 )
 
 func ProxyDisplayName(proxyType string) string {
@@ -113,6 +114,8 @@ func ProxyDisplayName(proxyType string) string {
 	case TypeCloudflared:
 		return "Cloudflared"
 	case TypeSelector:
+		return "Selector"
+	case TypeSubscription:
 		return "Selector"
 	case TypeURLTest:
 		return "URLTest"

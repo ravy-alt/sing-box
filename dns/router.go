@@ -38,12 +38,15 @@ var (
 )
 
 type Router struct {
+	validatorAccess       sync.RWMutex
+	childValidators       map[adapter.DNSRuleSetUpdateValidator]struct{}
 	ctx                   context.Context
 	logger                logger.ContextLogger
 	transport             adapter.DNSTransportManager
 	outbound              adapter.OutboundManager
 	powerManager          *powerreport.Manager
 	client                adapter.DNSClient
+	clientStart           sync.Once
 	rawRules              []option.DNSRule
 	rules                 []adapter.DNSRule
 	defaultDomainStrategy C.DomainStrategy
@@ -137,21 +140,39 @@ func (r *Router) Initialize(rules []option.DNSRule) error {
 	return nil
 }
 
+// StartBootstrap makes local DNS rules available to subscription downloads before
+// remote rule-sets can be loaded through those subscriptions. Start rebuilds the
+// rules with the final rule-set metadata afterwards.
+func (r *Router) StartBootstrap(scope *adapter.Scope) error {
+	r.clientStart.Do(r.client.Start)
+	rules, legacy, _, err := r.buildRules(true)
+	if err != nil {
+		return err
+	}
+	r.rulesAccess.Lock()
+	r.rules, r.legacyDNSMode = rules, legacy
+	r.rulesAccess.Unlock()
+	scope.Add(r.closeRules)
+	return nil
+}
+
+func (r *Router) closeRules() error {
+	r.rulesAccess.Lock()
+	r.closing = true
+	runtimeRules := r.rules
+	r.rules = nil
+	r.rulesAccess.Unlock()
+	closeRules(runtimeRules)
+	return nil
+}
+
 func (r *Router) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 	monitor := taskmonitor.New(r.logger, C.StartTimeout)
 	switch stage {
 	case adapter.StartStateStart:
-		scope.Add(func() error {
-			r.rulesAccess.Lock()
-			r.closing = true
-			runtimeRules := r.rules
-			r.rules = nil
-			r.rulesAccess.Unlock()
-			closeRules(runtimeRules)
-			return nil
-		})
+		scope.Add(r.closeRules)
 		monitor.Start("initialize DNS client")
-		r.client.Start()
+		r.clientStart.Do(r.client.Start)
 		monitor.Finish()
 
 		monitor.Start("initialize DNS rules")
@@ -166,10 +187,15 @@ func (r *Router) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 			closeRules(newRules)
 			return nil
 		}
+		oldRules := r.rules
 		r.rules = newRules
 		r.legacyDNSMode = legacyDNSMode
 		r.started = true
 		r.rulesAccess.Unlock()
+		if len(oldRules) > 0 {
+			// A subscription health check may still be using the bootstrap rules.
+			scope.Add(func() error { closeRules(oldRules); return nil })
+		}
 		if legacyDNSMode && common.Any(newRules, func(rule adapter.DNSRule) bool { return rule.WithAddressLimit() }) {
 			deprecated.Report(r.ctx, deprecated.OptionLegacyDNSAddressFilter)
 		}
@@ -234,7 +260,38 @@ func closeRules(rules []adapter.DNSRule) {
 	}
 }
 
+// AddRuleSetUpdateValidator also protects private DNS scopes that borrow this
+// router's rule sets. The returned cleanup must run when the scope is retired.
+func (r *Router) AddRuleSetUpdateValidator(validator adapter.DNSRuleSetUpdateValidator) func() error {
+	r.validatorAccess.Lock()
+	if r.childValidators == nil {
+		r.childValidators = make(map[adapter.DNSRuleSetUpdateValidator]struct{})
+	}
+	r.childValidators[validator] = struct{}{}
+	r.validatorAccess.Unlock()
+	return func() error {
+		r.validatorAccess.Lock()
+		delete(r.childValidators, validator)
+		r.validatorAccess.Unlock()
+		return nil
+	}
+}
+
 func (r *Router) ValidateRuleSetMetadataUpdate(tag string, metadata adapter.RuleSetMetadata) error {
+	if err := r.validateRuleSetMetadataUpdate(tag, metadata); err != nil {
+		return err
+	}
+	r.validatorAccess.RLock()
+	defer r.validatorAccess.RUnlock()
+	for validator := range r.childValidators {
+		if err := validator.ValidateRuleSetMetadataUpdate(tag, metadata); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Router) validateRuleSetMetadataUpdate(tag string, metadata adapter.RuleSetMetadata) error {
 	if len(r.rawRules) == 0 {
 		return nil
 	}

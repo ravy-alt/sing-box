@@ -9,6 +9,7 @@ import (
 
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/varbin"
+	"github.com/sagernet/sing/service"
 )
 
 type URLTestHistory struct {
@@ -40,10 +41,25 @@ type CacheFile interface {
 
 	LoadMode() string
 	StoreMode(mode string) error
-	LoadSelected(group string) string
-	StoreSelected(group string, selected string) error
+	SelectionCache
 	LoadGroupExpand(group string) (isExpand bool, loaded bool)
 	StoreGroupExpand(group string, expand bool) error
+	RuleSetCache
+}
+
+type SelectionCache interface {
+	LoadSelected(group string) string
+	StoreSelected(group string, selected string) error
+}
+
+func SelectionCacheFromContext(ctx context.Context) SelectionCache {
+	if cache := service.FromContext[SelectionCache](ctx); cache != nil {
+		return cache
+	}
+	return service.FromContext[CacheFile](ctx)
+}
+
+type RuleSetCache interface {
 	LoadRuleSet(tag string) *SavedBinary
 	SaveRuleSet(tag string, set *SavedBinary) error
 }

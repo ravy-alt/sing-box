@@ -108,12 +108,17 @@ func Context(
 }
 
 func New(options Options) (*Box, error) {
+	if err := option.ValidateGroupOutbounds(options.Options); err != nil {
+		return nil, err
+	}
 	createdAt := time.Now()
 	ctx := options.Context
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	ctx = service.ContextWithDefaultRegistry(ctx)
+	service.MustRegisterPtr(ctx, &adapter.SubscriptionHostOptions{Options: options.Options})
+	service.MustRegisterPtr(ctx, adapter.NewGroupUpdates())
 
 	endpointRegistry := service.FromContext[adapter.EndpointRegistry](ctx)
 	inboundRegistry := service.FromContext[adapter.InboundRegistry](ctx)
@@ -576,6 +581,24 @@ func (s *Box) preStart() error {
 		boxComponent{"network", s.network},
 		boxComponent{"connection", s.connection},
 		boxComponent{s.httpClientService.Name(), s.httpClientService},
+	)
+	if err != nil {
+		return err
+	}
+	for _, outbound := range s.outbound.Outbounds() {
+		if _, isSubscription := outbound.(adapter.Subscription); isSubscription {
+			err = s.dnsRouter.StartBootstrap(s.scope)
+			if err != nil {
+				return E.Cause(err, "initialize subscription bootstrap DNS")
+			}
+			break
+		}
+	}
+	err = adapter.InitializeSubscriptions(s.scope.Context(), s.outbound)
+	if err != nil {
+		return err
+	}
+	err = s.startComponents(adapter.StartStateStart,
 		boxComponent{"router", s.router},
 		boxComponent{"dns-router", s.dnsRouter},
 	)

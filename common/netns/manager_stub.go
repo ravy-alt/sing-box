@@ -22,6 +22,8 @@ func (m *Manager) Name() string {
 	return "netns"
 }
 
+func (m *Manager) NamespaceHolderArgs() []string { return nil }
+
 func (m *Manager) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 	return nil
 }

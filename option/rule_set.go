@@ -82,6 +82,17 @@ func (r *RuleSet) UnmarshalJSON(bytes []byte) error {
 	if err != nil {
 		return err
 	}
+	if r.Type == C.RuleSetTypeRemote {
+		// Preserve an explicit direct client across the generic object's removal
+		// of empty maps, just as subscription downloads do.
+		var client struct {
+			HTTPClient *HTTPClientOptions `json:"http_client"`
+		}
+		if err = json.Unmarshal(bytes, &client); err != nil {
+			return err
+		}
+		r.RemoteOptions.HTTPClient = client.HTTPClient
+	}
 	if r.Type != C.RuleSetTypeInline {
 		if r.Format == "" {
 			switch r.Type {

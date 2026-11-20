@@ -498,7 +498,8 @@
               "type": "string"
             },
             "endpoint": {
-              "type": "string"
+              "type": "string",
+              "x-tag-reference": "outbound"
             }
           },
           "required": [
@@ -660,7 +661,8 @@
                   "const": "tailscale"
                 },
                 "endpoint": {
-                  "type": "string"
+                  "type": "string",
+                  "x-tag-reference": "outbound"
                 }
               },
               "required": [
@@ -2829,7 +2831,8 @@
               "type": "string"
             },
             "endpoint": {
-              "type": "string"
+              "type": "string",
+              "x-tag-reference": "outbound"
             },
             "accept_default_resolvers": {
               "type": "boolean"
@@ -4795,6 +4798,62 @@
         },
         "debug": {
           "$ref": "#/$defs/DebugOptions"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GroupImport": {
+      "type": "object",
+      "properties": {
+        "group": {
+          "type": "string",
+          "x-tag-reference": "outbound"
+        },
+        "include": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "exclude": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "types": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "match": {
+          "type": "string",
+          "enum": [
+            "name",
+            "tag"
+          ]
         }
       },
       "additionalProperties": false
@@ -11882,6 +11941,12 @@
                 "x-tag-reference": "outbound"
               }
             },
+            "import": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/GroupImport"
+              }
+            },
             "default": {
               "type": "string",
               "x-tag-reference": "outbound"
@@ -12970,6 +13035,81 @@
           "type": "object",
           "properties": {
             "type": {
+              "const": "subscription"
+            },
+            "tag": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            },
+            "http_client": {
+              "$ref": "#/$defs/HTTPClientReference"
+            },
+            "bootstrap_http_client": {
+              "$ref": "#/$defs/HTTPClientReference"
+            },
+            "cache_path": {
+              "type": "string"
+            },
+            "update_interval": {
+              "$ref": "#/$defs/Duration"
+            },
+            "download_timeout": {
+              "$ref": "#/$defs/Duration"
+            },
+            "max_download_size": {
+              "type": "integer"
+            },
+            "max_cache_size": {
+              "type": "integer"
+            },
+            "drain_timeout": {
+              "$ref": "#/$defs/Duration"
+            },
+            "outbounds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "import": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/GroupImport"
+              }
+            },
+            "default": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "selector",
+                "urltest"
+              ]
+            },
+            "test_url": {
+              "type": "string"
+            },
+            "test_interval": {
+              "$ref": "#/$defs/Duration"
+            },
+            "tolerance": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
               "const": "tor"
             },
             "tag": {
@@ -13480,6 +13620,12 @@
               "items": {
                 "type": "string",
                 "x-tag-reference": "outbound"
+              }
+            },
+            "import": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/GroupImport"
               }
             },
             "url": {

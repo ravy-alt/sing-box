@@ -70,13 +70,13 @@ func (o TailscaleSSHServerOptions) DescribeSchema(builder schema.Builder) (*sche
 }
 
 type TailscaleDNSServerOptions struct {
-	Endpoint               string `json:"endpoint,omitempty"`
+	Endpoint               string `json:"endpoint,omitempty" reference:"outbound"`
 	AcceptDefaultResolvers bool   `json:"accept_default_resolvers,omitempty"`
 	AcceptSearchDomain     bool   `json:"accept_search_domain,omitempty"`
 }
 
 type TailscaleCertificateProviderOptions struct {
-	Endpoint string `json:"endpoint,omitempty"`
+	Endpoint string `json:"endpoint,omitempty" reference:"outbound"`
 }
 
 type DERPServiceOptions struct {

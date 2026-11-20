@@ -38,6 +38,7 @@
 | `dns`          | [DNS](./dns/)                   |
 | `selector`     | [Selector](./selector/)         |
 | `urltest`      | [URLTest](./urltest/)           |
+| `subscription` | [Subscription](./subscription/) |
 | `naive`        | [NaiveProxy](./naive/)          |
 
 #### tag

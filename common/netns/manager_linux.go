@@ -64,6 +64,8 @@ func (m *Manager) Name() string {
 	return "netns"
 }
 
+func (m *Manager) NamespaceHolderArgs() []string { return append([]string(nil), m.holderArgs...) }
+
 func (m *Manager) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 	if stage != adapter.StartStateInitialize {
 		return nil

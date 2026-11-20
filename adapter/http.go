@@ -16,6 +16,9 @@ type HTTPTransport interface {
 }
 
 type HTTPClientManager interface {
+	// NewDownloadTransport creates an independently owned transport. Closing it
+	// releases pooled connections without resetting other users of a shared client.
+	NewDownloadTransport(ctx context.Context, logger logger.ContextLogger, options *option.HTTPClientOptions) (HTTPTransport, func() error, error)
 	ResolveTransport(ctx context.Context, logger logger.ContextLogger, options option.HTTPClientOptions) (HTTPTransport, error)
 	DefaultTransport() HTTPTransport
 	ResetNetwork()
