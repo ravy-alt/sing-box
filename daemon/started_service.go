@@ -592,6 +592,9 @@ func (s *StartedService) readGroups() *Groups {
 	outbounds := boxService.outboundManager.Outbounds()
 	var iGroups []adapter.OutboundGroup
 	for _, it := range outbounds {
+		if adapter.IsSubscriptionSource(it) {
+			continue
+		}
 		if group, isGroup := adapter.OutboundGroupFor(it); isGroup {
 			iGroups = append(iGroups, group)
 		}
@@ -764,6 +767,9 @@ func (s *StartedService) SelectOutbound(ctx context.Context, request *SelectOutb
 	outboundGroup, isLoaded := boxService.outboundManager.Outbound(adapter.OutboundControlTag(boxService.ctx, request.GroupTag))
 	if !isLoaded {
 		return nil, status.Error(codes.NotFound, "selector not found: "+request.GroupTag)
+	}
+	if adapter.IsSubscriptionSource(outboundGroup) {
+		return nil, status.Error(codes.InvalidArgument, "subscription source is not a selector; use import")
 	}
 	control, _ := adapter.OutboundGroupFor(outboundGroup)
 	selector, isSelector := control.(adapter.SelectableOutboundGroup)
@@ -1188,6 +1194,9 @@ func (s *StartedService) SubscribeOutbounds(_ *emptypb.Empty, server grpc.Server
 		if started {
 			historyStorage := boxService.urlTestHistoryStorage
 			for _, ob := range boxService.outboundManager.Outbounds() {
+				if adapter.IsSubscriptionSource(ob) {
+					continue
+				}
 				item := &GroupItem{
 					Tag:  adapter.OutboundDisplayName(boxService.ctx, ob.Tag()),
 					Type: ob.Type(),

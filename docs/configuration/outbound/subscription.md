@@ -1,5 +1,7 @@
 # Subscription
 
+For new configurations, use top-level [subscriptions](../subscriptions.md) to separate sources from selection groups. This page describes the compatible legacy outbound form; it also supports the documented `override_dialer` fields.
+
 A subscription is a stable outbound group whose members are downloaded from a native sing-box JSON document. Nodes, internal groups, DNS servers and DNS rules are validated and published together without restarting the instance.
 
 `empty_fallback` supports an [empty-group fallback](../shared/group-import.md#empty_fallback) declared in the current configuration document. It is inserted only when the loaded document and filtered imports provide no members.

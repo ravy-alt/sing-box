@@ -82,6 +82,7 @@ nav:
   - Configuration:
       - configuration/index.md
       - JSON Schema: configuration/schema.md
+      - Subscriptions: configuration/subscriptions.md
       - Log:
           - configuration/log/index.md
       - DNS:
@@ -96,6 +97,7 @@ nav:
               - TLS: configuration/dns/server/tls.md
               - QUIC: configuration/dns/server/quic.md
               - HTTPS: configuration/dns/server/https.md
+              - Race: configuration/dns/server/race.md
               - HTTP3: configuration/dns/server/http3.md
               - DHCP: configuration/dns/server/dhcp.md
               - mDNS: configuration/dns/server/mdns.md

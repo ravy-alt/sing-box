@@ -49,6 +49,10 @@ func (m *Manager) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 				m.access.Unlock()
 				return E.New("default outbound not found: ", m.defaultTag)
 			}
+			if adapter.IsSubscriptionSource(defaultEndpoint) {
+				m.access.Unlock()
+				return E.New("default outbound cannot be a subscription source; use import: ", m.defaultTag)
+			}
 			m.defaultOutbound = defaultEndpoint
 		}
 		if m.defaultOutbound == nil {
@@ -56,6 +60,10 @@ func (m *Manager) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 			if err != nil {
 				m.access.Unlock()
 				return E.Cause(err, "create direct outbound for fallback")
+			}
+			if _, exists := m.outboundByTag[directOutbound.Tag()]; exists {
+				m.access.Unlock()
+				return E.New("fallback outbound tag conflicts with subscription source: ", directOutbound.Tag(), "; configure an explicit route.final")
 			}
 			m.outbounds = append(m.outbounds, directOutbound)
 			m.outboundByTag[directOutbound.Tag()] = directOutbound
@@ -205,7 +213,7 @@ func (m *Manager) Create(ctx context.Context, router adapter.Router, logger log.
 	}
 	m.outbounds = append(m.outbounds, outbound)
 	m.outboundByTag[tag] = outbound
-	if tag == m.defaultTag || (m.defaultTag == "" && m.defaultOutbound == nil) {
+	if !adapter.IsSubscriptionSource(outbound) && (tag == m.defaultTag || (m.defaultTag == "" && m.defaultOutbound == nil)) {
 		m.defaultOutbound = outbound
 	}
 	return nil

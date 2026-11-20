@@ -37,6 +37,9 @@ func NewReferenceManager(ctx context.Context, logger log.ContextLogger, options 
 	}
 	for _, outboundOptions := range options.Outbounds {
 		staticTransports = appendDomainResolver(staticTransports, outboundOptions.Options)
+		if source, ok := outboundOptions.Options.(*option.SubscriptionOutboundOptions); ok && source.OverrideDialer != nil && source.OverrideDialer.DomainResolver != nil {
+			staticTransports = append(staticTransports, source.OverrideDialer.DomainResolver.Server)
+		}
 	}
 	for _, endpointOptions := range options.Endpoints {
 		staticTransports = appendDomainResolver(staticTransports, endpointOptions.Options)

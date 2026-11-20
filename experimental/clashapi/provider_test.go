@@ -22,13 +22,16 @@ import (
 )
 
 type testProvider struct {
-	name string
+	sourceOnly bool
+	name       string
 	adapter.Outbound
 	calls, checks int
 	fail          bool
 	selected      string
 	all           []string
 }
+
+func (p *testProvider) SubscriptionSourceOnly() bool { return p.sourceOnly }
 
 func (p *testProvider) Tag() string {
 	if p.name != "" {

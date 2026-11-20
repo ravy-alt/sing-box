@@ -41,6 +41,7 @@ type Subscription struct {
 	stopWatch    func()
 	members      *groupmembers.Members
 	testWake     chan struct{}
+	autoTest     bool
 	dependencies *dependencyCoordinator
 	parent       *snapshot
 	outbound.Adapter
@@ -73,6 +74,12 @@ type Subscription struct {
 }
 
 func New(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.SubscriptionOutboundOptions) (adapter.Outbound, error) {
+	if err := options.OverrideDialer.Validate(); err != nil {
+		return nil, err
+	}
+	if options.OverrideDialer != nil && options.OverrideDialer.DomainResolver != nil && !externalReferenceExists(ctx, "dns_server", options.OverrideDialer.DomainResolver.Server) {
+		return nil, E.New("override_dialer.domain_resolver not found in the declaring scope: ", options.OverrideDialer.DomainResolver.Server)
+	}
 	u, err := url.Parse(options.URL)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return nil, E.New("subscription requires an HTTP(S) url")
@@ -93,6 +100,7 @@ func New(ctx context.Context, router adapter.Router, logger log.ContextLogger, t
 	if options.UpdateInterval < 0 || options.DownloadTimeout < 0 || options.TestInterval < 0 || options.DrainTimeout < 0 || options.MaxDownloadSize < 0 || options.MaxCacheSize < 0 {
 		return nil, E.New("subscription limits and intervals cannot be negative")
 	}
+	autoTest := options.Mode == C.TypeURLTest || options.SourceOnly && options.TestInterval > 0
 	if options.UpdateInterval == 0 {
 		options.UpdateInterval = badoption.Duration(24 * time.Hour)
 	}
@@ -101,6 +109,9 @@ func New(ctx context.Context, router adapter.Router, logger log.ContextLogger, t
 	}
 	if options.TestInterval == 0 {
 		options.TestInterval = badoption.Duration(3 * time.Minute)
+	}
+	if options.TestURL == "" {
+		options.TestURL = "https://www.gstatic.com/generate_204"
 	}
 	if options.MaxDownloadSize == 0 {
 		options.MaxDownloadSize = 16 << 20
@@ -126,10 +137,10 @@ func New(ctx context.Context, router adapter.Router, logger log.ContextLogger, t
 	ctx, cancel := context.WithCancel(ctx)
 	updatesCtx, cancelUpdates := context.WithCancel(ctx)
 	importDependencies := slices.DeleteFunc(groupmembers.Dependencies(nil, options.Import, options.EmptyFallback), func(dependency string) bool { return ownsMember(tag, dependency) })
-	s := &Subscription{updatesCtx: updatesCtx, cancelUpdates: cancelUpdates, dependencies: coordinator, parent: parent,
+	s := &Subscription{updatesCtx: updatesCtx, cancelUpdates: cancelUpdates, dependencies: coordinator, parent: parent, autoTest: autoTest,
 		Adapter: outbound.NewAdapter(C.TypeSubscription, tag, []string{N.NetworkTCP, N.NetworkUDP}, importDependencies),
 		ctx:     ctx, cancel: cancel, router: router, logger: logger, options: options, refreshGate: make(chan struct{}, 1), testWake: make(chan struct{}, 1),
-		status: adapter.SubscriptionStatus{Name: tag}, interrupt: interrupt.NewGroup(),
+		status: adapter.SubscriptionStatus{Name: tag, TestURL: options.TestURL}, interrupt: interrupt.NewGroup(),
 		history: service.PtrFromContext[urltest.HistoryStorage](ctx),
 	}
 	s.members, err = groupmembers.New(ctx, tag, func() []string {
@@ -157,7 +168,7 @@ func (s *Subscription) Start(stage adapter.StartStage, scope *adapter.Scope) err
 	case adapter.StartStateStarted:
 		s.stopWatch = s.members.Watch(scope, func() {
 			s.reconcileMembers()
-			if s.options.Mode == C.TypeURLTest {
+			if s.autoTest {
 				select {
 				case s.testWake <- struct{}{}:
 				default:
@@ -173,8 +184,15 @@ func (s *Subscription) Start(stage adapter.StartStage, scope *adapter.Scope) err
 func (s *Subscription) Status() adapter.SubscriptionStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.status
+	status := s.status
+	if status.SubscriptionInfo != nil {
+		copy := *status.SubscriptionInfo
+		status.SubscriptionInfo = &copy
+	}
+	return status
 }
+
+func (s *Subscription) SubscriptionSourceOnly() bool { return s.options.SourceOnly }
 
 func (s *Subscription) ValidateImports(allowPending bool) error {
 	if err := s.members.Validate(allowPending); err != nil {
@@ -199,6 +217,8 @@ func (s *Subscription) ValidateImports(allowPending bool) error {
 func (s *Subscription) OptionalImportDependency(tag string) bool {
 	return s.members.OptionalImportDependency(tag)
 }
+
+func (s *Subscription) ImportsSource(tag string) bool { return s.members.ImportsSource(tag) }
 
 func (s *Subscription) reconcileMembers() *groupmembers.Snapshot {
 	members := s.members.Resolve()
@@ -331,11 +351,13 @@ type dialLease struct {
 	owner                    *Subscription
 	snapshot                 *snapshot
 	member                   string
+	network                  string
+	destination              M.Socksaddr
 	selectedTCP, selectedUDP string
 }
 type dialPathKey struct{}
 
-func (s *Subscription) acquire(ctx context.Context, tag, network string) (*snapshot, adapter.Outbound, context.Context, error) {
+func (s *Subscription) acquire(ctx context.Context, tag, network string, destination M.Socksaddr) (*snapshot, adapter.Outbound, context.Context, error) {
 	path, _ := ctx.Value(dialPathKey{}).([]dialLease)
 	var pinned *dialLease
 	for i := range path {
@@ -376,7 +398,7 @@ func (s *Subscription) acquire(ctx context.Context, tag, network string) (*snaps
 		}
 	}
 	for _, entry := range path {
-		if entry.owner == s && entry.member == tag {
+		if entry.owner == s && entry.member == tag && entry.network == network && entry.destination == destination {
 			s.mu.Unlock()
 			return nil, nil, ctx, E.New("circular subscription dial path: ", s.Tag(), "/", tag)
 		}
@@ -396,7 +418,7 @@ func (s *Subscription) acquire(ctx context.Context, tag, network string) (*snaps
 		return nil, nil, ctx, net.ErrClosed
 	}
 	outbound, found := g.outbounds.Outbound(tag)
-	path = append(slices.Clone(path), dialLease{owner: s, snapshot: g, member: tag, selectedTCP: selectedTCP, selectedUDP: selectedUDP})
+	path = append(slices.Clone(path), dialLease{owner: s, snapshot: g, member: tag, network: network, destination: destination, selectedTCP: selectedTCP, selectedUDP: selectedUDP})
 	if !found || !slices.Contains(outboundNetworksFor(outbound, make(map[string]bool), path), network) {
 		g.release()
 		return nil, nil, ctx, E.New("subscription member unavailable for ", network, ": ", tag)
@@ -406,11 +428,14 @@ func (s *Subscription) acquire(ctx context.Context, tag, network string) (*snaps
 }
 
 func (s *Subscription) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if s.options.SourceOnly {
+		return nil, E.New("subscription source is not dialable; use import: ", s.Tag())
+	}
 	return s.dial(ctx, "", network, destination)
 }
 
 func (s *Subscription) dial(ctx context.Context, tag, network string, destination M.Socksaddr) (net.Conn, error) {
-	g, outbound, ctx, err := s.acquire(ctx, tag, N.NetworkName(network))
+	g, outbound, ctx, err := s.acquire(ctx, tag, N.NetworkName(network), destination)
 	if err != nil {
 		return nil, err
 	}
@@ -433,11 +458,14 @@ func (s *Subscription) dial(ctx context.Context, tag, network string, destinatio
 }
 
 func (s *Subscription) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	if s.options.SourceOnly {
+		return nil, E.New("subscription source is not dialable; use import: ", s.Tag())
+	}
 	return s.listen(ctx, "", destination)
 }
 
 func (s *Subscription) listen(ctx context.Context, tag string, destination M.Socksaddr) (net.PacketConn, error) {
-	g, outbound, ctx, err := s.acquire(ctx, tag, N.NetworkUDP)
+	g, outbound, ctx, err := s.acquire(ctx, tag, N.NetworkUDP, destination)
 	if err != nil {
 		return nil, err
 	}
@@ -581,7 +609,7 @@ func (s *Subscription) InterfaceUpdated(ctx context.Context) {
 	g.httpManager.ResetNetwork()
 }
 
-func (s *Subscription) publish(g *snapshot, content []byte, etag string, updated time.Time) error {
+func (s *Subscription) publish(g *snapshot, content []byte, etag string, updated time.Time, usage ...*adapter.SubscriptionInfo) error {
 	s.dependencies.Lock()
 	if err := s.dependencies.validate(s, g); err != nil {
 		s.dependencies.Unlock()
@@ -633,6 +661,11 @@ func (s *Subscription) publish(g *snapshot, content []byte, etag string, updated
 	}
 	s.content, s.etag = slices.Clone(content), etag
 	s.status.Ready, s.status.LastError, s.status.UpdatedAt = true, "", updated
+	s.status.SubscriptionInfo = nil
+	if len(usage) > 0 && usage[0] != nil {
+		copy := *usage[0]
+		s.status.SubscriptionInfo = &copy
+	}
 	s.status.Generation++
 	// Keep only live retired scopes so shutdown can force them closed.
 	s.retired = slices.DeleteFunc(s.retired, func(g *snapshot) bool {
@@ -671,7 +704,7 @@ func (s *Subscription) publish(g *snapshot, content []byte, etag string, updated
 	if old != nil {
 		old.retire(time.Duration(s.options.DrainTimeout))
 	}
-	if s.options.Mode == C.TypeURLTest {
+	if s.autoTest {
 		select {
 		case s.testWake <- struct{}{}:
 		default:
@@ -753,6 +786,9 @@ func (s *Subscription) fetch(ctx context.Context, options *option.HTTPClientOpti
 		s.mu.Lock()
 		s.status.UpdatedAt = time.Now()
 		s.status.LastError = ""
+		if info := parseSubscriptionInfo(response.Header.Get("Subscription-Userinfo")); info != nil {
+			s.status.SubscriptionInfo = info
+		}
 		s.mu.Unlock()
 		if err = s.saveCache(); err != nil {
 			s.logger.Error("save subscription cache: ", err)
@@ -783,7 +819,7 @@ func (s *Subscription) fetch(ctx context.Context, options *option.HTTPClientOpti
 		g.close()
 		return ctx.Err()
 	}
-	if err = s.publish(g, content, response.Header.Get("ETag"), time.Now()); err != nil {
+	if err = s.publish(g, content, response.Header.Get("ETag"), time.Now(), parseSubscriptionInfo(response.Header.Get("Subscription-Userinfo"))); err != nil {
 		return err
 	}
 	if err = s.saveCache(); err != nil {
@@ -814,7 +850,7 @@ func (s *Subscription) loop() {
 		case <-s.testWake:
 			_, _ = s.URLTest(s.updatesCtx)
 		case <-test.C:
-			if s.options.Mode == C.TypeURLTest {
+			if s.autoTest {
 				_, _ = s.URLTest(s.updatesCtx)
 			}
 		}

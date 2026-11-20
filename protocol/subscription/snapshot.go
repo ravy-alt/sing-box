@@ -302,7 +302,7 @@ func (s *Subscription) buildContext(buildCtx context.Context, content []byte) (_
 func (s *Subscription) buildResources(buildCtx context.Context, content []byte, saved *savedResources) (_ *snapshot, err error) {
 	ctx := service.ExtendContext(s.ctx)
 	service.MustRegisterPtr(ctx, s.importHistory())
-	doc, err := parseDocument(ctx, s.Tag(), content, s.options.Outbounds)
+	doc, err := parseDocument(ctx, s.Tag(), content, s.options.Outbounds, s.options.OverrideDialer)
 	if err != nil {
 		return nil, err
 	}
@@ -329,6 +329,7 @@ func (s *Subscription) buildResources(buildCtx context.Context, content []byte, 
 	}
 	ctx = g.scope.Context()
 	service.MustRegisterPtr(ctx, g)
+	service.MustRegisterPtr(ctx, &adapter.SubscriptionScopeOptions{Options: doc.options})
 	startupCtx, cancelStartup := context.WithCancel(ctx)
 	stopStartup := context.AfterFunc(buildCtx, cancelStartup)
 	defer stopStartup()
@@ -353,9 +354,14 @@ func (s *Subscription) buildResources(buildCtx context.Context, content []byte, 
 	g.endpoints = endpoints
 	service.MustRegister[adapter.EndpointManager](ctx, endpoints)
 	defaultTag := ""
-	if len(doc.options.Outbounds) > 0 {
-		defaultTag = doc.options.Outbounds[0].Tag
-	} else if len(doc.options.Endpoints) > 0 {
+	for _, entry := range doc.options.Outbounds {
+		if source, ok := entry.Options.(*option.SubscriptionOutboundOptions); ok && source.SourceOnly {
+			continue
+		}
+		defaultTag = entry.Tag
+		break
+	}
+	if defaultTag == "" && len(doc.options.Endpoints) > 0 {
 		defaultTag = doc.options.Endpoints[0].Tag
 	}
 	if doc.options.Route != nil && doc.options.Route.Final != "" {

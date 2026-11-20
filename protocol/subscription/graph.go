@@ -2,8 +2,6 @@ package subscription
 
 import (
 	"context"
-	"fmt"
-	"net/netip"
 	"net/url"
 	"reflect"
 	"slices"
@@ -11,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/dependency"
 	groupmembers "github.com/sagernet/sing-box/common/group"
 	"github.com/sagernet/sing-box/option"
 	E "github.com/sagernet/sing/common/exceptions"
@@ -80,8 +79,8 @@ func externalReferenceExists(ctx context.Context, kind, tag string) bool {
 	switch kind {
 	case "outbound":
 		if manager := service.FromContext[adapter.OutboundManager](ctx); manager != nil {
-			_, found := manager.Outbound(tag)
-			return found
+			outbound, found := manager.Outbound(tag)
+			return found && !adapter.IsSubscriptionSource(outbound)
 		}
 	case "dns_server":
 		if manager := service.FromContext[adapter.DNSTransportManager](ctx); manager != nil {
@@ -113,91 +112,12 @@ func externalReferenceExists(ctx context.Context, kind, tag string) bool {
 	return false
 }
 
-// visitReferences uses the same typed reference metadata as the configuration
-// schema. It never rewrites arbitrary strings (passwords, URLs or certificates).
-func visitReferences(value reflect.Value, visit func(string, string) (string, error)) error {
-	if !value.IsValid() {
-		return nil
-	}
-	if value.Kind() == reflect.Pointer || value.Kind() == reflect.Interface {
-		if value.IsNil() {
-			return nil
-		}
-		return visitReferences(value.Elem(), visit)
-	}
-	var specialKind string
-	switch value.Type() {
-	case reflect.TypeFor[option.HTTPClientOptions]():
-		specialKind = "http_client"
-	case reflect.TypeFor[option.CertificateProviderOptions]():
-		specialKind = "certificate_provider"
-	}
-	if specialKind != "" {
-		tag := value.FieldByName("Tag")
-		if tag.String() != "" {
-			mapped, err := visit(specialKind, tag.String())
-			if err != nil {
-				return err
-			}
-			if tag.String() != mapped {
-				tag.SetString(mapped)
-			}
-			return nil
-		}
-	}
-	switch value.Kind() {
-	case reflect.Struct:
-		for i := 0; i < value.NumField(); i++ {
-			field := value.Type().Field(i)
-			if !field.IsExported() {
-				continue
-			}
-			v := value.Field(i)
-			if kind := field.Tag.Get("reference"); kind != "" {
-				var rewrite func(reflect.Value) error
-				rewrite = func(v reflect.Value) error {
-					if v.Kind() == reflect.Slice {
-						for j := 0; j < v.Len(); j++ {
-							if err := rewrite(v.Index(j)); err != nil {
-								return err
-							}
-						}
-						return nil
-					}
-					if v.Kind() != reflect.String {
-						return E.New("unsupported reference field: ", field.Name)
-					}
-					if v.String() == "" {
-						return nil
-					}
-					mapped, err := visit(kind, v.String())
-					if err != nil {
-						return err
-					}
-					if v.String() != mapped {
-						v.SetString(mapped)
-					}
-					return nil
-				}
-				if err := rewrite(v); err != nil {
-					return err
-				}
-			} else if err := visitReferences(v, visit); err != nil {
-				return err
-			}
-		}
-	case reflect.Slice:
-		for i := 0; i < value.Len(); i++ {
-			if err := visitReferences(value.Index(i), visit); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func parseDocument(ctx context.Context, provider string, content []byte, members []string) (*document, error) {
+func parseDocument(ctx context.Context, provider string, content []byte, members []string, overrides ...*option.SubscriptionDialerOverride) (*document, error) {
 	options, err := json.UnmarshalExtendedContext[option.Options](ctx, content)
+	if err != nil {
+		return nil, err
+	}
+	options, err = option.ExpandSubscriptions(options)
 	if err != nil {
 		return nil, err
 	}
@@ -305,6 +225,9 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 	}
 	if len(members) == 0 {
 		for _, outbound := range options.Outbounds {
+			if source, ok := outbound.Options.(*option.SubscriptionOutboundOptions); ok && source.SourceOnly {
+				continue
+			}
 			members = append(members, outbound.Tag)
 		}
 		for _, endpoint := range options.Endpoints {
@@ -312,6 +235,11 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 		}
 	}
 	for _, name := range members {
+		for _, outbound := range options.Outbounds {
+			if source, ok := outbound.Options.(*option.SubscriptionOutboundOptions); ok && source.SourceOnly && outbound.Tag == name {
+				return nil, E.New("subscription source cannot be a member: ", name, "; use import")
+			}
+		}
 		tag, exists := d.outboundTags[name]
 		if !exists {
 			return nil, E.New("subscription member not found: ", name)
@@ -367,7 +295,17 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 				mapped = previous
 				graph[node] = append(graph[node], "outbound:"+mapped)
 			} else {
-				mapped, err = rewrite(node)("outbound", original)
+				// Source-only providers can be consumed by import, never by a
+				// detour, resolver, routing action or fixed group membership.
+				if manager := service.FromContext[adapter.OutboundManager](ctx); manager != nil && d.outboundTags[original] == "" {
+					if source, found := manager.Outbound(original); found && adapter.IsSubscriptionSource(source) {
+						mapped = original
+						graph[node] = append(graph[node], "outbound:"+mapped)
+					}
+				}
+				if mapped == "" {
+					mapped, err = rewrite(node)("outbound", original)
+				}
 				if err != nil && previous != "" {
 					mapped, err = previous, nil
 					graph[node] = append(graph[node], "outbound:"+mapped)
@@ -393,7 +331,7 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 			return nil, err
 		}
 		options.DNS.Final = mapped
-		if err := visitReferences(reflect.ValueOf(&options.DNS.Rules), func(kind, name string) (string, error) {
+		if err := dependency.VisitReferences(reflect.ValueOf(&options.DNS.Rules), func(kind, name string) (string, error) {
 			if kind == "outbound" {
 				// Matching an outbound tag does not dial through that outbound.
 				if name == "any" {
@@ -420,7 +358,7 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 			if _, remote := server.Options.(option.ServerOptionsWrapper); remote {
 				err = prepareDialer(server.Options, "dns_server:"+server.Tag, defaultResolver, d.resolverTag, graph, rewrite)
 			} else {
-				err = visitReferences(reflect.ValueOf(server.Options), rewrite("dns_server:"+server.Tag))
+				err = dependency.VisitReferences(reflect.ValueOf(server.Options), rewrite("dns_server:"+server.Tag))
 			}
 			if err != nil {
 				return nil, err
@@ -503,20 +441,20 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 			download := *nested
 			download.Import = nil
 			download.EmptyFallback = ""
-			if err := visitReferences(reflect.ValueOf(&download), rewrite("bootstrap:"+outbound.Tag)); err != nil {
+			if err := dependency.VisitReferences(reflect.ValueOf(&download), rewrite("bootstrap:"+outbound.Tag)); err != nil {
 				return nil, err
 			}
 			nested.HTTPClient, nested.BootstrapHTTPClient = download.HTTPClient, download.BootstrapHTTPClient
 			continue
 		}
-		if err := prepareDialer(outbound.Options, "outbound:"+outbound.Tag, defaultResolver, d.resolverTag, graph, rewrite); err != nil {
+		if err := prepareImportedDialer(ctx, outbound.Options, "outbound:"+outbound.Tag, defaultResolver, d.resolverTag, graph, rewrite, overrides); err != nil {
 			return nil, err
 		}
 	}
 	for i := range options.Endpoints {
 		endpoint := &options.Endpoints[i]
 		endpoint.Tag = d.outboundTags[endpoint.Tag]
-		if err := prepareDialer(endpoint.Options, "outbound:"+endpoint.Tag, defaultResolver, d.resolverTag, graph, rewrite); err != nil {
+		if err := prepareImportedDialer(ctx, endpoint.Options, "outbound:"+endpoint.Tag, defaultResolver, d.resolverTag, graph, rewrite, overrides); err != nil {
 			return nil, err
 		}
 	}
@@ -533,7 +471,7 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 	for i := range options.CertificateProviders {
 		certificate := &options.CertificateProviders[i]
 		certificate.Tag = d.resources["certificate_provider"][certificate.Tag]
-		if err := visitReferences(reflect.ValueOf(certificate.Options), rewrite("certificate_provider:"+certificate.Tag)); err != nil {
+		if err := dependency.VisitReferences(reflect.ValueOf(certificate.Options), rewrite("certificate_provider:"+certificate.Tag)); err != nil {
 			return nil, err
 		}
 	}
@@ -541,7 +479,7 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 		for i := range options.Route.RuleSet {
 			ruleSet := &options.Route.RuleSet[i]
 			// Expand the source tags before namespacing; {tag} is a URL/path template.
-			if err := visitReferences(reflect.ValueOf(ruleSet), rewrite("bootstrap:rule_set:"+strings.Join(ruleSet.Tag, ","))); err != nil {
+			if err := dependency.VisitReferences(reflect.ValueOf(ruleSet), rewrite("bootstrap:rule_set:"+strings.Join(ruleSet.Tag, ","))); err != nil {
 				return nil, err
 			}
 		}
@@ -553,15 +491,15 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 		}
 	}
 	if options.DNS == nil {
-		resolver := parentResolverDependency(ctx)
+		resolver := dependency.ParentResolver(ctx)
 		for _, outbound := range options.Outbounds {
-			implicitResolverDependency(outbound.Options, "outbound:"+outbound.Tag, resolver, graph)
+			dependency.ImplicitResolver(outbound.Options, "outbound:"+outbound.Tag, resolver, graph)
 		}
 		for _, endpoint := range options.Endpoints {
-			implicitResolverDependency(endpoint.Options, "outbound:"+endpoint.Tag, resolver, graph)
+			dependency.ImplicitResolver(endpoint.Options, "outbound:"+endpoint.Tag, resolver, graph)
 		}
 	}
-	resolver := parentResolverDependency(ctx)
+	resolver := dependency.ParentResolver(ctx)
 	if d.resolverTag != "" {
 		resolver = "dns_server:" + d.resolverTag
 	}
@@ -574,104 +512,56 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 	}
 	for _, outbound := range options.Outbounds {
 		if _, nested := outbound.Options.(*option.SubscriptionOutboundOptions); !nested {
-			auxiliaryResolverDependencies(outbound.Options, "outbound:"+outbound.Tag, resolver, graph)
+			dependency.AuxiliaryResolvers(outbound.Options, "outbound:"+outbound.Tag, resolver, graph)
 		}
 	}
 	for _, endpoint := range options.Endpoints {
-		auxiliaryResolverDependencies(endpoint.Options, "outbound:"+endpoint.Tag, resolver, graph)
+		dependency.AuxiliaryResolvers(endpoint.Options, "outbound:"+endpoint.Tag, resolver, graph)
 	}
 	for _, provider := range options.CertificateProviders {
-		auxiliaryResolverDependencies(provider.Options, "certificate_provider:"+provider.Tag, resolver, graph)
+		dependency.AuxiliaryResolvers(provider.Options, "certificate_provider:"+provider.Tag, resolver, graph)
 	}
 	for i := range options.HTTPClients {
-		auxiliaryResolverDependencies(&options.HTTPClients[i], "http_client:"+options.HTTPClients[i].Tag, resolver, graph)
+		dependency.AuxiliaryResolvers(&options.HTTPClients[i], "http_client:"+options.HTTPClients[i].Tag, resolver, graph)
 	}
 	if options.DNS != nil {
 		for _, server := range options.DNS.Servers {
-			auxiliaryResolverDependencies(server.Options, "dns_server:"+server.Tag, resolver, graph)
+			dependency.AuxiliaryResolvers(server.Options, "dns_server:"+server.Tag, resolver, graph)
 		}
 	}
 	d.options = options
+	for _, outbound := range options.Outbounds {
+		dependency.ResolveIPDetour(outbound.Options, "outbound:"+outbound.Tag, graph)
+		dependency.AddIPNode(outbound.Options, outbound.Tag, graph)
+	}
+	for _, endpoint := range options.Endpoints {
+		dependency.ResolveIPDetour(endpoint.Options, "outbound:"+endpoint.Tag, graph)
+		dependency.AddIPNode(endpoint.Options, endpoint.Tag, graph)
+	}
+	if options.DNS != nil {
+		for _, server := range options.DNS.Servers {
+			dependency.ResolveIPDetour(server.Options, "dns_server:"+server.Tag, graph)
+		}
+	}
 	d.dependencies = graph
 	localGraph := make(map[string][]string, len(graph))
 	for node, edges := range graph {
 		localGraph[node] = slices.Clone(edges)
 	}
-	for _, edges := range graph {
-		for _, edge := range edges {
-			if _, exists := localGraph[edge]; !exists {
-				localGraph[edge] = nil
-			}
-		}
-	}
-	d.order, err = dependencyOrder(localGraph)
+	dependency.CompleteExternalReferences(localGraph)
+	d.order, err = dependency.Order(localGraph)
 	if err != nil {
 		return nil, err
 	}
 	return d, nil
 }
 
-// Only add an implicit resolver when dialing can actually resolve a name.
-// In particular, an IP-only tunnel may itself carry the DNS server's traffic.
-func needsDomainResolver(options any) bool {
-	switch options := options.(type) {
-	case *option.NaiveOutboundOptions:
-		return true
-	case *option.Hysteria2OutboundOptions:
-		return options.ServerIsDomain() || options.Realm != nil && options.Realm.STUNServersIsDomain()
-	case *option.WireGuardEndpointOptions:
-		for _, peer := range options.Peers {
-			if peer.Address != "" {
-				if _, err := netip.ParseAddr(peer.Address); err != nil {
-					return true
-				}
-			}
-		}
-		return false
-	case *option.OpenVPNClientEndpointOptions:
-		if options.ServerIsDomain() {
-			return true
-		}
-		for _, remote := range options.Servers {
-			if remote.ServerIsDomain() {
-				return true
-			}
-		}
-		return false
-	case *option.OpenConnectEndpointOptions:
-		server := options.Server
-		if !strings.Contains(server, "://") {
-			server = "https://" + server
-		}
-		parsed, err := url.Parse(server)
-		if err != nil {
-			return true
-		}
-		_, err = netip.ParseAddr(parsed.Hostname())
-		return err != nil
-	}
-	if server, ok := options.(option.ServerOptionsWrapper); ok {
-		return server.TakeServerOptions().ServerIsDomain()
-	}
-	return true
-}
-
-func resolvesOnDetour(options any) bool {
-	switch options := options.(type) {
-	case *option.WireGuardEndpointOptions, *option.TailscaleEndpointOptions, *option.OpenVPNClientEndpointOptions, *option.OpenConnectEndpointOptions, *option.NaiveOutboundOptions:
-		return true
-	case *option.Hysteria2OutboundOptions:
-		return options.Realm != nil && options.Realm.STUNServersIsDomain()
-	}
-	return false
-}
-
 func prepareDialer(options any, node string, defaults *option.DomainResolveOptions, resolver string, graph map[string][]string, rewrite func(string) func(string, string) (string, error)) error {
 	wrapper, hasDialer := options.(option.DialerOptionsWrapper)
-	needsResolver := needsDomainResolver(options)
+	needsResolver := dependency.NeedsDomainResolver(options)
 	if hasDialer && needsResolver {
 		dial := wrapper.TakeDialerOptions()
-		if (dial.DomainResolver == nil || dial.DomainResolver.Server == "") && (dial.Detour == "" || resolvesOnDetour(options)) && defaults != nil {
+		if (dial.DomainResolver == nil || dial.DomainResolver.Server == "") && (dial.Detour == "" || dependency.ResolvesOnDetour(options)) && defaults != nil {
 			copy := *defaults
 			if dial.DomainResolver != nil {
 				copy = *dial.DomainResolver
@@ -681,12 +571,12 @@ func prepareDialer(options any, node string, defaults *option.DomainResolveOptio
 			wrapper.ReplaceDialerOptions(dial)
 		}
 	}
-	if err := visitReferences(reflect.ValueOf(options), rewrite(node)); err != nil {
+	if err := dependency.VisitReferences(reflect.ValueOf(options), rewrite(node)); err != nil {
 		return err
 	}
 	if hasDialer && needsResolver && resolver != "" {
 		dial := wrapper.TakeDialerOptions()
-		if (dial.DomainResolver == nil || dial.DomainResolver.Server == "") && (dial.Detour == "" || resolvesOnDetour(options)) {
+		if (dial.DomainResolver == nil || dial.DomainResolver.Server == "") && (dial.Detour == "" || dependency.ResolvesOnDetour(options)) {
 			if dial.DomainResolver == nil {
 				dial.DomainResolver = &option.DomainResolveOptions{}
 			}
@@ -696,43 +586,4 @@ func prepareDialer(options any, node string, defaults *option.DomainResolveOptio
 		}
 	}
 	return nil
-}
-
-func dependencyOrder(graph map[string][]string) ([]string, error) {
-	state := make(map[string]uint8)
-	var order, path []string
-	var visit func(string) error
-	visit = func(node string) error {
-		if state[node] == 2 {
-			return nil
-		}
-		if state[node] == 1 {
-			return fmt.Errorf("circular subscription dependency: %s", strings.Join(append(path, node), " -> "))
-		}
-		if _, exists := graph[node]; !exists {
-			return E.New("missing subscription dependency: ", node)
-		}
-		state[node] = 1
-		path = append(path, node)
-		for _, dependency := range graph[node] {
-			if err := visit(dependency); err != nil {
-				return err
-			}
-		}
-		path = path[:len(path)-1]
-		state[node] = 2
-		order = append(order, node)
-		return nil
-	}
-	var nodes []string
-	for node := range graph {
-		nodes = append(nodes, node)
-	}
-	slices.Sort(nodes)
-	for _, node := range nodes {
-		if err := visit(node); err != nil {
-			return nil, err
-		}
-	}
-	return order, nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/sagernet/sing-box/adapter/outbound"
 	boxService "github.com/sagernet/sing-box/adapter/service"
 	"github.com/sagernet/sing-box/common/certificate"
+	"github.com/sagernet/sing-box/common/dependency"
 	"github.com/sagernet/sing-box/common/dialer"
 	"github.com/sagernet/sing-box/common/httpclient"
 	"github.com/sagernet/sing-box/common/netns"
@@ -108,6 +109,11 @@ func Context(
 }
 
 func New(options Options) (*Box, error) {
+	normalized, err := option.ExpandSubscriptions(options.Options)
+	if err != nil {
+		return nil, err
+	}
+	options.Options = normalized
 	if err := option.ValidateGroupOutbounds(options.Options); err != nil {
 		return nil, err
 	}
@@ -165,7 +171,7 @@ func New(options Options) (*Box, error) {
 	ctx = pause.WithDefaultManager(ctx)
 	experimentalOptions := common.PtrValueOrDefault(options.Experimental)
 	debugOptions := common.PtrValueOrDefault(experimentalOptions.Debug)
-	err := checkDebugOptions(debugOptions)
+	err = checkDebugOptions(debugOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -555,6 +561,9 @@ func (s *Box) startInternalServices(stage adapter.StartStage) error {
 }
 
 func (s *Box) preStart() error {
+	if err := dependency.ValidateHost(s.scope.Context()); err != nil {
+		return err
+	}
 	monitor := taskmonitor.New(s.logger, C.StartTimeout)
 	monitor.Start("start logger")
 	err := s.logFactory.Start()

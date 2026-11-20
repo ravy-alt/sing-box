@@ -17,14 +17,15 @@ import (
 )
 
 type savedSubscription struct {
-	Version   int                          `json:"version"`
-	URLHash   string                       `json:"url_hash"`
-	ETag      string                       `json:"etag,omitempty"`
-	UpdatedAt time.Time                    `json:"updated_at"`
-	Content   []byte                       `json:"content"`
-	Resources *savedResources              `json:"resources,omitempty"`
-	Imports   map[string]map[string]string `json:"imports,omitempty"`
-	Names     map[string]string            `json:"names,omitempty"`
+	Version          int                          `json:"version"`
+	URLHash          string                       `json:"url_hash"`
+	ETag             string                       `json:"etag,omitempty"`
+	UpdatedAt        time.Time                    `json:"updated_at"`
+	Content          []byte                       `json:"content"`
+	Resources        *savedResources              `json:"resources,omitempty"`
+	Imports          map[string]map[string]string `json:"imports,omitempty"`
+	Names            map[string]string            `json:"names,omitempty"`
+	SubscriptionInfo *adapter.SubscriptionInfo    `json:"subscription_info,omitempty"`
 }
 
 func (s *Subscription) urlHash() string {
@@ -87,7 +88,7 @@ func (s *Subscription) restoreSaved(saved savedSubscription) error {
 		return err
 	}
 	g.savedNames = saved.Names
-	return s.publish(g, saved.Content, saved.ETag, saved.UpdatedAt)
+	return s.publish(g, saved.Content, saved.ETag, saved.UpdatedAt, saved.SubscriptionInfo)
 }
 
 // Only committed snapshots enter the cache. Rename keeps the previous good
@@ -101,6 +102,7 @@ func (s *Subscription) saveCache() error {
 		return nil
 	}
 	saved := savedSubscription{Version: 1, URLHash: s.urlHash(), ETag: s.etag, UpdatedAt: s.status.UpdatedAt, Content: s.content, Resources: s.current.resources.snapshot(), Imports: s.current.imports}
+	saved.SubscriptionInfo = s.status.SubscriptionInfo
 	s.mu.Unlock()
 	saved.Names = s.savedNames()
 	if parent := service.PtrFromContext[resourceCache](s.ctx); parent != nil {

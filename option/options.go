@@ -25,6 +25,7 @@ type _Options struct {
 	Endpoints            []Endpoint            `json:"endpoints,omitempty"`
 	Inbounds             []Inbound             `json:"inbounds,omitempty"`
 	Outbounds            []Outbound            `json:"outbounds,omitempty"`
+	Subscriptions        []SubscriptionOptions `json:"subscriptions,omitempty"`
 	Route                *RouteOptions         `json:"route,omitempty"`
 	Services             []Service             `json:"services,omitempty"`
 	Experimental         *ExperimentalOptions  `json:"experimental,omitempty"`

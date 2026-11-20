@@ -145,6 +145,15 @@ func (m *Members) OptionalImportDependency(tag string) bool {
 	return false
 }
 
+func (m *Members) ImportsSource(tag string) bool {
+	for _, spec := range m.imports {
+		if spec.Group == tag {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Members) Updates() *adapter.GroupUpdates { return m.updates }
 
 func (m *Members) Resolve() *Snapshot {

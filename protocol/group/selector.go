@@ -137,6 +137,8 @@ func (s *Selector) OptionalImportDependency(tag string) bool {
 	return s.members.OptionalImportDependency(tag)
 }
 
+func (s *Selector) ImportsSource(tag string) bool { return s.members.ImportsSource(tag) }
+
 func (s *Selector) reconcile() {
 	members := s.members.Resolve()
 	s.mu.Lock()

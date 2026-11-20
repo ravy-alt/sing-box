@@ -3,6 +3,7 @@ package clashapi
 import (
 	"context"
 	"net/http"
+	"slices"
 
 	"github.com/sagernet/sing-box/adapter"
 
@@ -43,6 +44,25 @@ func proxyProviderRouter(server *Server) http.Handler {
 			}
 			render.NoContent(w, r)
 		})
+		r.Get("/{proxy}/healthcheck", func(w http.ResponseWriter, r *http.Request) {
+			provider := r.Context().Value(CtxKeyProvider).(adapter.Subscription)
+			tag := adapter.OutboundControlTag(server.ctx, getEscapeParam(r, "proxy"))
+			if !slices.Contains(provider.All(), tag) {
+				render.Status(r, http.StatusNotFound)
+				render.JSON(w, r, ErrNotFound)
+				return
+			}
+			outbound, found := provider.ProviderOutbound(tag)
+			if !found {
+				outbound, found = server.outbound.Outbound(tag)
+			}
+			if !found || adapter.IsSubscriptionSource(outbound) {
+				render.Status(r, http.StatusNotFound)
+				render.JSON(w, r, ErrNotFound)
+				return
+			}
+			getProxyDelay(server)(w, r.WithContext(context.WithValue(r.Context(), CtxKeyProxy, outbound)))
+		})
 	})
 	return r
 }
@@ -59,7 +79,11 @@ func providerInfo(server *Server, provider adapter.Subscription) any {
 			proxies = append(proxies, proxyInfo(server, outbound))
 		}
 	}
-	return render.M{"name": adapter.OutboundDisplayName(server.ctx, status.Name), "type": "Proxy", "vehicleType": "HTTP", "updatedAt": status.UpdatedAt, "ready": status.Ready, "generation": status.Generation, "lastError": status.LastError, "proxies": proxies}
+	info := render.M{"name": adapter.OutboundDisplayName(server.ctx, status.Name), "type": "Proxy", "vehicleType": "HTTP", "updatedAt": status.UpdatedAt, "ready": status.Ready, "generation": status.Generation, "lastError": status.LastError, "proxies": proxies, "testUrl": status.TestURL}
+	if status.SubscriptionInfo != nil {
+		info["subscriptionInfo"] = status.SubscriptionInfo
+	}
+	return info
 }
 
 func parseProviderName(next http.Handler) http.Handler {

@@ -128,6 +128,8 @@ func (s *URLTest) OptionalImportDependency(tag string) bool {
 	return s.members.OptionalImportDependency(tag)
 }
 
+func (s *URLTest) ImportsSource(tag string) bool { return s.members.ImportsSource(tag) }
+
 func (s *URLTest) All() []string { return slices.Clone(s.members.Resolve().Tags) }
 
 func (s *URLTest) Selected(network string) adapter.Outbound {

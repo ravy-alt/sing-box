@@ -41,6 +41,7 @@ DNS 服务器的类型。
 | `tls`           | [TLS](./tls/)             |
 | `quic`          | [QUIC](./quic/)           |
 | `https`         | [HTTPS](./https/)         |
+| `race`          | [Race](./race/)           |
 | `h3`            | [HTTP/3](./http3/)        |
 | `dhcp`          | [DHCP](./dhcp/)           |
 | `mdns`          | [mDNS](./mdns/)           |

@@ -55,6 +55,14 @@ func (m *member) SubscriptionControl() (adapter.Subscription, bool) {
 	return subscription, ok
 }
 
+func (m *member) SubscriptionSourceOnly() (sourceOnly bool) {
+	_ = m.control(func(outbound adapter.Outbound) error {
+		sourceOnly = adapter.IsSubscriptionSource(outbound)
+		return nil
+	})
+	return
+}
+
 type managedGroup struct{ *member }
 
 func (g *managedGroup) All() (tags []string) {

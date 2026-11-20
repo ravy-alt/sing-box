@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -16,6 +15,7 @@ import (
 	F "github.com/sagernet/sing/common/format"
 	"github.com/sagernet/sing/common/json/badjson"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/render"
@@ -47,7 +47,7 @@ func findProxyByName(server *Server) func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			name := adapter.OutboundControlTag(server.ctx, r.Context().Value(CtxKeyProxyName).(string))
 			proxy, exist := server.outbound.Outbound(name)
-			if !exist {
+			if !exist || adapter.IsSubscriptionSource(proxy) {
 				render.Status(r, http.StatusNotFound)
 				render.JSON(w, r, ErrNotFound)
 				return
@@ -69,6 +69,9 @@ func proxyInfo(server *Server, detour adapter.Outbound) *badjson.JSONObject {
 	}
 	info.Put("type", clashType)
 	info.Put("name", adapter.OutboundDisplayName(server.ctx, detour.Tag()))
+	if member, ok := detour.(adapter.ProvidedOutbound); ok {
+		info.Put("provider-name", adapter.OutboundDisplayName(server.ctx, member.ProviderTag()))
+	}
 	info.Put("udp", common.Contains(detour.Network(), N.NetworkUDP))
 	delayHistory := server.urlTestHistory.LoadURLTestHistory(group.RealTag(detour, N.NetworkTCP))
 	if delayHistory != nil {
@@ -91,7 +94,7 @@ func getProxies(server *Server) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var proxyMap badjson.JSONObject
 		outbounds := common.Filter(server.outbound.Outbounds(), func(detour adapter.Outbound) bool {
-			return detour.Tag() != ""
+			return detour.Tag() != "" && !adapter.IsSubscriptionSource(detour)
 		})
 		outbounds = append(outbounds, common.Map(common.Filter(server.endpoint.Endpoints(), func(detour adapter.Endpoint) bool {
 			return detour.Tag() != ""
@@ -219,30 +222,44 @@ func getProxyDelay(server *Server) func(w http.ResponseWriter, r *http.Request) 
 	return func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
 		url := query.Get("url")
-		if strings.HasPrefix(url, "http://") {
-			url = ""
-		}
-		timeout, err := strconv.ParseInt(query.Get("timeout"), 10, 16)
-		if err != nil {
+		timeout, err := strconv.ParseInt(query.Get("timeout"), 10, 32)
+		if err != nil || timeout <= 0 || timeout > 60000 {
 			render.Status(r, http.StatusBadRequest)
 			render.JSON(w, r, ErrBadRequest)
 			return
 		}
 
 		proxy := r.Context().Value(CtxKeyProxy).(adapter.Outbound)
-		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*time.Duration(timeout))
+		ctx, cancel := context.WithTimeout(r.Context(), time.Millisecond*time.Duration(timeout))
 		defer cancel()
+		var updates *adapter.GroupUpdates
+		var revision uint64
+		if server.ctx != nil {
+			updates = service.PtrFromContext[adapter.GroupUpdates](server.ctx)
+			if updates != nil {
+				revision, _ = updates.State()
+			}
+		}
 
 		delay, err := urltest.URLTest(ctx, url, proxy)
+		if err == nil && delay == 0 {
+			delay = 1
+		}
 		defer func() {
 			realTag := group.RealTag(proxy, N.NetworkTCP)
-			if err != nil {
-				server.urlTestHistory.DeleteURLTestHistory(realTag)
+			store := func() {
+				if err != nil {
+					server.urlTestHistory.DeleteURLTestHistory(realTag)
+				} else {
+					server.urlTestHistory.StoreURLTestHistory(realTag, &adapter.URLTestHistory{Time: time.Now(), Delay: delay})
+				}
+			}
+			if updates != nil {
+				if !updates.Commit(revision, store) {
+					return
+				}
 			} else {
-				server.urlTestHistory.StoreURLTestHistory(realTag, &adapter.URLTestHistory{
-					Time:  time.Now(),
-					Delay: delay,
-				})
+				store()
 			}
 			for _, detour := range server.outbound.Outbounds() {
 				control, _ := adapter.OutboundGroupFor(detour)

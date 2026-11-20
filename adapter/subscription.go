@@ -13,6 +13,10 @@ import (
 // a dynamic provider update against the rest of the running configuration.
 type SubscriptionHostOptions struct{ Options option.Options }
 
+// SubscriptionScopeOptions retains this candidate's declarations for validating
+// source-only references after nested providers become available.
+type SubscriptionScopeOptions struct{ Options option.Options }
+
 type SelectableOutboundGroup interface {
 	OutboundGroup
 	SelectOutbound(tag string) bool
@@ -33,11 +37,20 @@ type ProvidedOutbound interface {
 }
 
 type SubscriptionStatus struct {
-	Name       string    `json:"name"`
-	Ready      bool      `json:"ready"`
-	UpdatedAt  time.Time `json:"updatedAt"`
-	LastError  string    `json:"lastError,omitempty"`
-	Generation uint64    `json:"generation"`
+	Name             string            `json:"name"`
+	Ready            bool              `json:"ready"`
+	UpdatedAt        time.Time         `json:"updatedAt"`
+	LastError        string            `json:"lastError,omitempty"`
+	Generation       uint64            `json:"generation"`
+	TestURL          string            `json:"testUrl"`
+	SubscriptionInfo *SubscriptionInfo `json:"subscriptionInfo,omitempty"`
+}
+
+type SubscriptionInfo struct {
+	Upload   uint64 `json:"Upload"`
+	Download uint64 `json:"Download"`
+	Total    uint64 `json:"Total"`
+	Expire   uint64 `json:"Expire"`
 }
 
 type Subscription interface {
@@ -47,6 +60,15 @@ type Subscription interface {
 	Restore() error
 	Refresh(context.Context) error
 	Status() SubscriptionStatus
+}
+
+// Subscription sources share provider lifecycle machinery but are not routing
+// targets. Group import and provider APIs may access them explicitly.
+func IsSubscriptionSource(outbound Outbound) bool {
+	if source, ok := outbound.(interface{ SubscriptionSourceOnly() bool }); ok {
+		return source.SubscriptionSourceOnly()
+	}
+	return false
 }
 
 // InitializeSubscriptions restores every cache before attempting network access. A
@@ -97,6 +119,20 @@ func initializeSubscriptions(ctx context.Context, manager OutboundManager, allow
 }
 
 func ValidateSubscriptionDependencies(ctx context.Context, manager OutboundManager, allowPending bool) error {
+	isSource := func(tag string) bool {
+		outbound, found := manager.Outbound(tag)
+		return found && IsSubscriptionSource(outbound)
+	}
+	if host := service.PtrFromContext[SubscriptionHostOptions](ctx); host != nil {
+		if err := option.ValidateSubscriptionReferences(host.Options, isSource); err != nil {
+			return err
+		}
+	}
+	if local := service.PtrFromContext[SubscriptionScopeOptions](ctx); local != nil {
+		if err := option.ValidateSubscriptionReferences(local.Options, isSource); err != nil {
+			return err
+		}
+	}
 	outbounds := manager.Outbounds()
 	if endpoints := service.FromContext[EndpointManager](ctx); endpoints != nil {
 		for _, endpoint := range endpoints.Endpoints() {
@@ -117,6 +153,12 @@ func ValidateSubscriptionDependencies(ctx context.Context, manager OutboundManag
 			if !found {
 				return E.New("subscription dependency not found: ", tag, " for ", outbound.Tag())
 			}
+			if IsSubscriptionSource(dependency) {
+				importer, ok := outbound.(interface{ ImportsSource(string) bool })
+				if !ok || !importer.ImportsSource(tag) {
+					return E.New("subscription source ", tag, " is not dialable; use import in ", outbound.Tag())
+				}
+			}
 			if provided, ok := dependency.(ProvidedOutbound); ok && !provided.Available() && !allowPending {
 				return E.New("subscription member not found: ", tag, " for ", outbound.Tag())
 			}
@@ -124,6 +166,9 @@ func ValidateSubscriptionDependencies(ctx context.Context, manager OutboundManag
 	}
 	if provided, ok := manager.Default().(ProvidedOutbound); ok && !provided.Available() && !allowPending {
 		return E.New("default subscription member not found: ", provided.Tag())
+	}
+	if IsSubscriptionSource(manager.Default()) {
+		return E.New("default outbound is a subscription source; use import")
 	}
 	return nil
 }

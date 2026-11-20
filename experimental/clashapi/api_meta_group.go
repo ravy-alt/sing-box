@@ -31,7 +31,7 @@ func getGroups(server *Server) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groups := common.Map(common.Filter(server.outbound.Outbounds(), func(it adapter.Outbound) bool {
 			_, isGroup := adapter.OutboundGroupFor(it)
-			return isGroup
+			return isGroup && !adapter.IsSubscriptionSource(it)
 		}), func(it adapter.Outbound) *badjson.JSONObject {
 			return proxyInfo(server, it)
 		})

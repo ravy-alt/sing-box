@@ -80,6 +80,7 @@ func testContext() context.Context {
 	hosts.RegisterTransport(dnsRegistry)
 	transport.RegisterUDP(dnsRegistry)
 	transport.RegisterHTTPS(dnsRegistry)
+	transport.RegisterRace(dnsRegistry)
 	endpoints := endpoint.NewRegistry()
 	endpoint.Register[testOptions](endpoints, "test", func(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options testOptions) (adapter.Endpoint, error) {
 		d, err := dialer.New(ctx, options.DialerOptions, true)
