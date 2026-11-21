@@ -24,6 +24,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	R "github.com/sagernet/sing-box/route/rule"
 	"github.com/sagernet/sing/common"
+	"github.com/sagernet/sing/common/bufio/deadline"
 	E "github.com/sagernet/sing/common/exceptions"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
@@ -177,19 +178,27 @@ func (g *snapshot) untrack(conn io.Closer) {
 
 type leasedConn struct {
 	net.Conn
-	once    sync.Once
-	release func()
+	once     sync.Once
+	release  func()
+	closeErr error
 }
 
 func (c *leasedConn) Close() error {
-	err := c.Conn.Close()
-	c.once.Do(func() { release := c.release; c.release = nil; release() })
-	return err
+	c.once.Do(func() {
+		c.closeErr = c.Conn.Close()
+		release := c.release
+		c.release = nil
+		release()
+	})
+	return c.closeErr
 }
 
 func (c *leasedConn) NeedHandshakeForRead() bool  { return N.NeedHandshakeForRead(c.Conn) }
 func (c *leasedConn) NeedHandshakeForWrite() bool { return N.NeedHandshakeForWrite(c.Conn) }
-func (c *leasedConn) CloseRead() error            { return N.CloseRead(c.Conn) }
+func (c *leasedConn) NeedAdditionalReadDeadline() bool {
+	return deadline.NeedAdditionalReadDeadline(c.Conn)
+}
+func (c *leasedConn) CloseRead() error { return N.CloseRead(c.Conn) }
 func (c *leasedConn) CloseWrite() error {
 	writer, _ := N.UnwrapCountWriter(c.Conn, nil)
 	if duplex, ok := N.UnwrapWriter(writer).(N.WriteCloser); ok {
@@ -203,14 +212,55 @@ func (c *leasedConn) CloseWrite() error {
 type leasedPacketConn struct {
 	// Keep packet methods so domain addresses survive DNS NAT on UDP replies.
 	N.NetPacketConn
-	once    sync.Once
-	release func()
+	once     sync.Once
+	release  func()
+	closeErr error
 }
 
 func (c *leasedPacketConn) Close() error {
-	err := c.NetPacketConn.Close()
-	c.once.Do(func() { release := c.release; c.release = nil; release() })
-	return err
+	c.once.Do(func() {
+		c.closeErr = c.NetPacketConn.Close()
+		release := c.release
+		c.release = nil
+		release()
+	})
+	return c.closeErr
+}
+
+func (c *leasedPacketConn) NeedHandshakeForRead() bool {
+	return N.NeedHandshakeForReadAny(c.NetPacketConn)
+}
+
+func (c *leasedPacketConn) NeedHandshakeForWrite() bool {
+	return N.NeedHandshakeForWriteAny(c.NetPacketConn)
+}
+
+func (c *leasedPacketConn) NeedAdditionalReadDeadline() bool {
+	return deadline.NeedAdditionalReadDeadline(c.NetPacketConn)
+}
+
+// Packet methods pass buffers straight to the protocol. Preserve its allocation
+// requirements even though the connection must remain opaque to unwrapping:
+// exposing Upstream would let callers bypass Close and leak the snapshot lease.
+// Use the calculated requirements so nested dialers/wrappers are included.
+func (c *leasedPacketConn) FrontHeadroom() int {
+	return N.CalculateFrontHeadroom(c.NetPacketConn)
+}
+
+func (c *leasedPacketConn) RearHeadroom() int {
+	return N.CalculateRearHeadroom(c.NetPacketConn)
+}
+
+func (c *leasedPacketConn) ReaderOverhead() int {
+	return N.CalculateReaderOverhead(c.NetPacketConn)
+}
+
+func (c *leasedPacketConn) ReaderMTU() int {
+	return N.CalculateMTU(c.NetPacketConn, nil)
+}
+
+func (c *leasedPacketConn) WriterMTU() int {
+	return N.CalculateMTU(nil, c.NetPacketConn)
 }
 
 type networkView struct {

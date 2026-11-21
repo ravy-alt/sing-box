@@ -198,3 +198,6 @@ require (
 	lukechampine.com/blake3 v1.3.0 // indirect
 	zombiezen.com/go/capnproto2 v2.18.2+incompatible // indirect
 )
+
+// Local close-state synchronization fixes; see third_party/sing-anytls/PATCHES.txt.
+replace github.com/anytls/sing-anytls => ./third_party/sing-anytls

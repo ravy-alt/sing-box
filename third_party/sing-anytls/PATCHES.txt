@@ -1,0 +1,15 @@
+Based on github.com/anytls/sing-anytls v0.0.11, under the original GPL-3.0-or-later
+license in LICENSE. This local replacement keeps the existing protocol version
+and API; it does not modify the shared Go module cache.
+
+Local changes (2026-11-21):
+- Publish Stream's terminal error atomically. Read/Write may run concurrently
+  with local Close, a remote FIN, and session shutdown.
+- Install the client's stream close hook before publishing the stream to the
+  receive loop. The hook is immutable until the winning close operation runs.
+- Finish stream removal/FIN before returning the session to its idle pool.
+
+Reproduction: root module's TestSubscriptionTLSConnectionProtocols/anytls with
+the Go race detector. Additional focused tests are in session/stream_test.go.
+When updating the upstream module, compare these fixes and run both test sets
+before removing this replacement.
