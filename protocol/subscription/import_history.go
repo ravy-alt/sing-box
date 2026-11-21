@@ -19,7 +19,13 @@ func (s *Subscription) importHistory() *groupmembers.ImportHistory {
 	for owner, references := range s.importAliases {
 		history.Aliases[owner] = references
 	}
+	ready := s.status.Ready
 	s.mu.Unlock()
+	// The unloaded connection scope has no document identities of its own.
+	// Preserve inherited and cached aliases until a real snapshot is accepted.
+	if !ready {
+		return history
+	}
 	g := s.activeSnapshot()
 	if g == nil {
 		return history

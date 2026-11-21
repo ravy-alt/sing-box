@@ -45,8 +45,9 @@ empty or unexpected files before generating checksums or allowing publication.
 When updating the upstream version or matrix, update this inventory as well.
 
 `.github/test-subscription.sh` runs race tests for subscription lifecycle,
-dependency/DNS handling, public names, imports, Clash API and connection
-contracts, plus tests for the locally patched AnyTLS module. It is also usable
+dependency/DNS handling, public names, imports, Clash API, connection
+contracts and AnyTLS/Shadowsocks UDP handling, plus tests for the locally patched
+AnyTLS module. It is also usable
 locally with Go 1.26.10 or a compatible newer toolchain.
 
 This workflow does not package the separate SFA/SFI/SFL/SFM/SFW graphical

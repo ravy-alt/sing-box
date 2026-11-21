@@ -30,8 +30,9 @@ func (o *SubscriptionDialerOverride) Validate() error {
 }
 
 // Every optional scalar is a pointer so false, zero and the empty string are
-// intentional overrides. Protocol settings and detour chains remain untouched.
+// intentional overrides. Unspecified fields retain the source's values.
 type SubscriptionDialerOverride struct {
+	Detour               *string                            `json:"detour,omitempty" reference:"outbound"`
 	DomainResolver       *DomainResolveOptions              `json:"domain_resolver,omitempty"`
 	BindInterface        *string                            `json:"bind_interface,omitempty"`
 	Inet4BindAddress     *badoption.Addr                    `json:"inet4_bind_address,omitempty"`

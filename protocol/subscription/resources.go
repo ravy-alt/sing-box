@@ -17,6 +17,23 @@ import (
 
 type subscriptionAncestorsKey struct{}
 
+// An unloaded provider owns no nodes, but can still dial its configured
+// fallback and imported groups. Keep those connections in an ordinary lease
+// scope so the first successful download can retire it without dropping them.
+type unloadedOutboundView struct {
+	adapter.OutboundManager
+	owner string
+}
+
+func (m *unloadedOutboundView) Outbounds() []adapter.Outbound { return nil }
+func (m *unloadedOutboundView) Default() adapter.Outbound     { return nil }
+func (m *unloadedOutboundView) Outbound(tag string) (adapter.Outbound, bool) {
+	if ownsMember(m.owner, tag) || m.OutboundManager == nil {
+		return nil, false
+	}
+	return m.OutboundManager.Outbound(tag)
+}
+
 type endpointView struct {
 	*endpoint.Manager
 	parent adapter.EndpointManager

@@ -8,7 +8,8 @@ SB_LDFLAGS="$(cat release/LDFLAGS)"
 
 go test -race -count=1 -timeout=10m -tags "$SB_TAGS" -ldflags "$SB_LDFLAGS" \
   ./adapter ./adapter/outbound ./common/dependency ./common/group \
-  ./common/httpclient ./common/urltest ./protocol/subscription \
+  ./common/httpclient ./common/urltest ./protocol/anytls \
+  ./protocol/shadowsocks ./protocol/subscription \
   ./experimental/clashapi ./daemon ./dns ./dns/transport ./option ./route
 
 go -C third_party/sing-anytls test -race -count=1 -timeout=5m ./...

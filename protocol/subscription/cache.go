@@ -97,7 +97,7 @@ func (s *Subscription) saveCache() error {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 	s.mu.Lock()
-	if s.current == nil || s.closed {
+	if s.current == nil || !s.status.Ready || s.closed {
 		s.mu.Unlock()
 		return nil
 	}

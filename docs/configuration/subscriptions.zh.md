@@ -49,7 +49,15 @@
 
 `tag` 必填，与当前文档的出站、端点及其他订阅源标签不能重复。
 
-下载与缓存字段沿用[订阅引擎](outbound/subscription.md)：`url`、`http_client`、`bootstrap_http_client`、`cache_path`、`update_interval`、`download_timeout`、`max_download_size`、`max_cache_size`、`drain_timeout`。HTTP 客户端可以使用共享标签或内联对象；省略继承默认客户端，`{}` 明确直连。下载依赖尚未加载的本订阅时，必须有可用缓存或独立的 `bootstrap_http_client`，不会偷偷绕过配置改为直连。
+下载与缓存字段沿用[订阅引擎](outbound/subscription.md)：`url`、`http_client`、`bootstrap_http_client`、`cache_path`、`update_interval`、`download_timeout`、`max_download_size`、`max_cache_size`、`drain_timeout`。HTTP 客户端可以使用共享标签或内联对象；省略继承默认客户端，`{}` 明确直连。下载依赖尚未加载的本订阅时，需要可用缓存、独立的 `bootstrap_http_client`，或下载组中可用的回落出站才能完成下载；不会偷偷绕过配置改为直连。
+
+下载器不要求设置 `bind_interface`；未绑定接口时使用原生拨号器的默认出口策略。启用 TUN 时仍需通过自动检测接口、路由标记等配置避免回流。
+
+没有可用缓存且下载失败（包括已配置的备用下载器失败）时，订阅以空成员继续启动，面板保留 `ready: false` 和 `lastError`，不会把失败状态写成空订阅缓存。
+
+后台在 5 秒后重试，连续失败时按 10、20、40、60 秒退避，最长 60 秒，且不超过配置的 `update_interval`。成功后恢复正常更新周期，所有受影响的导入组动态更新成员，有符合过滤条件的节点时自动移除之前插入的 `empty_fallback`；过滤后仍为空的组继续保留回落节点。显式写在 `outbounds` 中的静态成员不会因此删除。
+
+已有有效节点时刷新失败会保留旧版本，也会自动重试。配置错误、无效订阅文档及依赖环路仍需通过校验，启动取消也不会被忽略。
 
 `outbounds` 可按原始标签筛选下载文档的成员，依赖仍完整保留。`import` 可追加其他组或订阅源的成员，并动态跟随增删；过滤语义见[组导入](shared/group-import.md)。来源中的顶级 `subscriptions` 支持嵌套，并与父资源树一起校验和回收。订阅源不提供选择策略，也没有 `default`、`mode`、`tolerance` 或 `empty_fallback`，这些应放在消费它的策略组中。
 
@@ -61,6 +69,7 @@
 
 | 字段 | 用途 |
 | --- | --- |
+| `detour` | 显式替换节点原有的链式拨号出站；空字符串清除原链路，省略保留原值 |
 | `domain_resolver` | 指定节点域名解析器，支持原生字符串和对象形式；整体替换已有解析器及旧 `domain_strategy` |
 | `connect_timeout` | 连接超时 |
 | `bind_interface`、`inet4_bind_address`、`inet6_bind_address`、`bind_address_no_port` | 本机出口接口和源地址 |
@@ -74,7 +83,9 @@
 
 覆盖解析器的引用属于订阅声明所在作用域：顶级订阅引用主配置 DNS，嵌套订阅引用父文档 DNS。不会被下载内容中的同名 DNS 劫持。未设置覆盖时，来源的自定义 DNS 和链式引用继续保留。覆盖会在依赖检查、初始化前应用；缓存保存原始文档，重启时使用当前覆盖设置重新构建。
 
-不提供 `detour`、协议服务器、认证、TLS 或多路复用的统一覆盖。尤其不能把所有节点的 `detour` 改成同一值，否则可能破坏来源内部链式代理或构成自环。保持原生拨号语义：存在 `detour` 时，本机套接字设置由真正建立底层连接的节点决定；显式 `domain_resolver` 仍可在链路拨号前解析域名。
+`detour` 同样引用订阅声明所在作用域的出站，不会被下载文档中的同名节点覆盖。显式设置会替换原有链路，包括文档中的中继节点；只有确实要统一改变出口时才设置。目标可以是 selector/urltest，但不能是订阅源，也不能通过 `import` 或其他依赖返回被覆盖的订阅，否则启动或更新会拒绝该环路。比如为 equalvpn 配置 `override_dialer: {"detour":"equalvpn-upstream"}` 时，上游 selector 可以固定加入 `direct`、`bw-hy2`，并导入其他订阅，但不能导入 equalvpn 自身。
+
+不提供协议服务器、认证、TLS 或多路复用的统一覆盖。保持原生拨号语义：存在 `detour` 时，本机套接字设置由真正建立底层连接的节点决定；显式 `domain_resolver` 仍可在链路拨号前解析域名。
 
 ## 热更新与校验
 

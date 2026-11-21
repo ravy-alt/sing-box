@@ -72,6 +72,12 @@ func ValidateSubscriptionReferences(options Options, isSource func(string) bool)
 				if field.Tag.Get("reference") == "outbound" {
 					var check func(reflect.Value) error
 					check = func(v reflect.Value) error {
+						if v.Kind() == reflect.Pointer {
+							if v.IsNil() {
+								return nil
+							}
+							return check(v.Elem())
+						}
 						if v.Kind() == reflect.Slice {
 							for j := 0; j < v.Len(); j++ {
 								if err := check(v.Index(j)); err != nil {

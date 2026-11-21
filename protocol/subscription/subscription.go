@@ -41,6 +41,7 @@ type Subscription struct {
 	stopWatch    func()
 	members      *groupmembers.Members
 	testWake     chan struct{}
+	updateWake   chan struct{}
 	autoTest     bool
 	dependencies *dependencyCoordinator
 	parent       *snapshot
@@ -63,6 +64,8 @@ type Subscription struct {
 	selectionInitialized  bool
 	selectionBootstrapped bool
 	status                adapter.SubscriptionStatus
+	lastRefresh           time.Time
+	retryDelay            time.Duration
 	etag                  string
 	content               []byte
 	importAliases         map[string]map[string]string
@@ -139,7 +142,7 @@ func New(ctx context.Context, router adapter.Router, logger log.ContextLogger, t
 	importDependencies := slices.DeleteFunc(groupmembers.Dependencies(nil, options.Import, options.EmptyFallback), func(dependency string) bool { return ownsMember(tag, dependency) })
 	s := &Subscription{updatesCtx: updatesCtx, cancelUpdates: cancelUpdates, dependencies: coordinator, parent: parent, autoTest: autoTest,
 		Adapter: outbound.NewAdapter(C.TypeSubscription, tag, []string{N.NetworkTCP, N.NetworkUDP}, importDependencies),
-		ctx:     ctx, cancel: cancel, router: router, logger: logger, options: options, refreshGate: make(chan struct{}, 1), testWake: make(chan struct{}, 1),
+		ctx:     ctx, cancel: cancel, router: router, logger: logger, options: options, refreshGate: make(chan struct{}, 1), testWake: make(chan struct{}, 1), updateWake: make(chan struct{}, 1),
 		status: adapter.SubscriptionStatus{Name: tag, TestURL: options.TestURL}, interrupt: interrupt.NewGroup(),
 		history: service.PtrFromContext[urltest.HistoryStorage](ctx),
 	}
@@ -156,6 +159,10 @@ func New(ctx context.Context, router adapter.Router, logger log.ContextLogger, t
 		cancel()
 		return nil, err
 	}
+	s.current = &snapshot{
+		owner: s, scope: adapter.NewScope(ctx, logger), resources: newResourceCache(nil),
+		outbounds: &unloadedOutboundView{OutboundManager: service.FromContext[adapter.OutboundManager](ctx), owner: tag},
+	}
 	return s, nil
 }
 
@@ -166,6 +173,9 @@ func (s *Subscription) Start(stage adapter.StartStage, scope *adapter.Scope) err
 	case adapter.StartStateStart:
 		return s.members.Validate(true)
 	case adapter.StartStateStarted:
+		if status := s.Status(); !status.Ready {
+			s.logger.Warn("subscription unavailable; using empty members and retrying in background: ", status.LastError)
+		}
 		s.stopWatch = s.members.Watch(scope, func() {
 			s.reconcileMembers()
 			if s.autoTest {
@@ -330,14 +340,14 @@ func (s *Subscription) ProviderOutbound(tag string) (adapter.Outbound, bool) {
 	if !ownsMember(s.Tag(), tag) {
 		return nil, false
 	}
+	s.mu.Lock()
+	pending := !s.closed && !s.status.Ready
+	s.mu.Unlock()
+	if pending {
+		return &member{owner: s, tag: tag}, true
+	}
 	g := s.activeSnapshot()
 	if g == nil {
-		s.mu.Lock()
-		pending := !s.closed && s.current == nil
-		s.mu.Unlock()
-		if pending {
-			return &member{owner: s, tag: tag}, true
-		}
 		return nil, false
 	}
 	defer g.release()
@@ -606,7 +616,9 @@ func (s *Subscription) InterfaceUpdated(ctx context.Context) {
 	if g.dnsRouter != nil {
 		g.dnsRouter.ResetNetwork()
 	}
-	g.httpManager.ResetNetwork()
+	if g.httpManager != nil {
+		g.httpManager.ResetNetwork()
+	}
 }
 
 func (s *Subscription) publish(g *snapshot, content []byte, etag string, updated time.Time, usage ...*adapter.SubscriptionInfo) error {
@@ -617,7 +629,7 @@ func (s *Subscription) publish(g *snapshot, content []byte, etag string, updated
 		return err
 	}
 	s.mu.Lock()
-	allowPending := s.current == nil && s.parent == nil
+	allowPending := !s.status.Ready && s.parent == nil && !s.selectionBootstrapped
 	s.mu.Unlock()
 	for parent := s.parent; parent != nil; parent = parent.owner.parent {
 		parent.mu.Lock()
@@ -638,7 +650,7 @@ func (s *Subscription) publish(g *snapshot, content []byte, etag string, updated
 	}
 	s.publishNames(g)
 	old := s.current
-	if old == nil {
+	if !s.status.Ready {
 		if cache := adapter.SelectionCacheFromContext(s.ctx); cache != nil {
 			if selected := cache.LoadSelected(s.Tag()); selected != "" {
 				s.initialSelected = selected
@@ -745,12 +757,30 @@ func (s *Subscription) Refresh(ctx context.Context) error {
 	err := s.fetch(ctx, s.options.HTTPClient)
 	if err != nil && s.options.BootstrapHTTPClient != nil && ctx.Err() == nil {
 		s.logger.Debug("subscription download failed; trying configured bootstrap client: ", err)
-		err = s.fetch(ctx, s.options.BootstrapHTTPClient)
+		fallbackErr := s.fetch(ctx, s.options.BootstrapHTTPClient)
+		// A failed fallback download must not hide a validation error in the
+		// primary response and turn an invalid graph into an empty provider.
+		if fallbackErr == nil || adapter.IsSubscriptionDownloadError(err) || !adapter.IsSubscriptionDownloadError(fallbackErr) {
+			err = fallbackErr
+		}
 	}
+	s.mu.Lock()
+	s.lastRefresh = time.Now()
 	if err != nil {
-		s.mu.Lock()
 		s.status.LastError = err.Error()
-		s.mu.Unlock()
+		if s.retryDelay == 0 {
+			s.retryDelay = 5 * time.Second
+		} else {
+			s.retryDelay *= 2
+		}
+		s.retryDelay = min(s.retryDelay, time.Minute, time.Duration(s.options.UpdateInterval))
+	} else {
+		s.retryDelay = 0
+	}
+	s.mu.Unlock()
+	select {
+	case s.updateWake <- struct{}{}:
+	default:
 	}
 	return err
 }
@@ -776,12 +806,12 @@ func (s *Subscription) fetch(ctx context.Context, options *option.HTTPClientOpti
 	}
 	response, err := (&http.Client{Transport: transport}).Do(request)
 	if err != nil {
-		return err
+		return &adapter.SubscriptionDownloadError{Err: err}
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotModified {
 		if !s.Status().Ready {
-			return E.New("subscription returned 304 without a cached snapshot")
+			return &adapter.SubscriptionDownloadError{Err: E.New("subscription returned 304 without a cached snapshot")}
 		}
 		s.mu.Lock()
 		s.status.UpdatedAt = time.Now()
@@ -796,28 +826,31 @@ func (s *Subscription) fetch(ctx context.Context, options *option.HTTPClientOpti
 		return nil
 	}
 	if response.StatusCode != http.StatusOK {
-		return E.New("subscription HTTP status: ", response.StatusCode)
+		return &adapter.SubscriptionDownloadError{Err: E.New("subscription HTTP status: ", response.StatusCode)}
 	}
 	if response.ContentLength > s.options.MaxDownloadSize {
 		return E.New("subscription exceeds max_download_size")
 	}
 	content, err := io.ReadAll(io.LimitReader(response.Body, s.options.MaxDownloadSize+1))
 	if err != nil {
-		return err
+		return &adapter.SubscriptionDownloadError{Err: err}
 	}
 	if int64(len(content)) > s.options.MaxDownloadSize {
 		return E.New("subscription exceeds max_download_size")
 	}
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return &adapter.SubscriptionDownloadError{Err: ctx.Err()}
 	}
 	g, err := s.buildContext(ctx, content)
 	if err != nil {
+		if ctx.Err() != nil {
+			return &adapter.SubscriptionDownloadError{Err: ctx.Err()}
+		}
 		return E.Cause(err, "validate subscription")
 	}
 	if ctx.Err() != nil {
 		g.close()
-		return ctx.Err()
+		return &adapter.SubscriptionDownloadError{Err: ctx.Err()}
 	}
 	if err = s.publish(g, content, response.Header.Get("ETag"), time.Now(), parseSubscriptionInfo(response.Header.Get("Subscription-Userinfo"))); err != nil {
 		return err
@@ -828,17 +861,21 @@ func (s *Subscription) fetch(ctx context.Context, options *option.HTTPClientOpti
 	return nil
 }
 
+func (s *Subscription) nextUpdateDelay() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.retryDelay > 0 {
+		return max(0, time.Until(s.lastRefresh.Add(s.retryDelay)))
+	}
+	return max(0, time.Until(s.status.UpdatedAt.Add(time.Duration(s.options.UpdateInterval))))
+}
+
 func (s *Subscription) loop() {
 	defer s.wg.Done()
-	update := time.NewTicker(time.Duration(s.options.UpdateInterval))
+	update := time.NewTimer(s.nextUpdateDelay())
 	defer update.Stop()
 	test := time.NewTicker(time.Duration(s.options.TestInterval))
 	defer test.Stop()
-	if time.Since(s.Status().UpdatedAt) >= time.Duration(s.options.UpdateInterval) {
-		if err := s.Refresh(s.updatesCtx); err != nil {
-			s.logger.Error("refresh subscription: ", err)
-		}
-	}
 	for {
 		select {
 		case <-s.updatesCtx.Done():
@@ -847,6 +884,9 @@ func (s *Subscription) loop() {
 			if err := s.Refresh(s.updatesCtx); err != nil {
 				s.logger.Error("refresh subscription: ", err)
 			}
+			update.Reset(s.nextUpdateDelay())
+		case <-s.updateWake:
+			update.Reset(s.nextUpdateDelay())
 		case <-s.testWake:
 			_, _ = s.URLTest(s.updatesCtx)
 		case <-test.C:

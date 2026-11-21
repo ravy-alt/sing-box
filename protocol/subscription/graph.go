@@ -557,6 +557,10 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 }
 
 func prepareDialer(options any, node string, defaults *option.DomainResolveOptions, resolver string, graph map[string][]string, rewrite func(string) func(string, string) (string, error)) error {
+	return prepareDialerWithExternalDetour(options, node, defaults, resolver, graph, rewrite, nil)
+}
+
+func prepareDialerWithExternalDetour(options any, node string, defaults *option.DomainResolveOptions, resolver string, graph map[string][]string, rewrite func(string) func(string, string) (string, error), externalDetour *string) error {
 	wrapper, hasDialer := options.(option.DialerOptionsWrapper)
 	needsResolver := dependency.NeedsDomainResolver(options)
 	if hasDialer && needsResolver {
@@ -571,8 +575,24 @@ func prepareDialer(options any, node string, defaults *option.DomainResolveOptio
 			wrapper.ReplaceDialerOptions(dial)
 		}
 	}
+	if hasDialer && externalDetour != nil {
+		// Overrides refer to the declaring scope. Hide just this field during
+		// source reference rewriting so a same-named imported node cannot win.
+		// Preserve detour semantics for resolver defaults before and after it.
+		dial := wrapper.TakeDialerOptions()
+		dial.Detour = ""
+		wrapper.ReplaceDialerOptions(dial)
+	}
 	if err := dependency.VisitReferences(reflect.ValueOf(options), rewrite(node)); err != nil {
 		return err
+	}
+	if hasDialer && externalDetour != nil {
+		dial := wrapper.TakeDialerOptions()
+		dial.Detour = *externalDetour
+		wrapper.ReplaceDialerOptions(dial)
+		if dial.Detour != "" {
+			graph[node] = append(graph[node], "outbound:"+dial.Detour)
+		}
 	}
 	if hasDialer && needsResolver && resolver != "" {
 		dial := wrapper.TakeDialerOptions()

@@ -20,6 +20,9 @@ func prepareImportedDialer(ctx context.Context, options any, node string, defaul
 	if err != nil {
 		return E.Cause(err, node, ": override_dialer")
 	}
+	if override.Detour != nil && *override.Detour != "" && !externalReferenceExists(ctx, "outbound", *override.Detour) {
+		return E.New(node, ": override_dialer.detour not found in the declaring scope: ", *override.Detour)
+	}
 	var explicit *option.DomainResolveOptions
 	if override.DomainResolver != nil {
 		explicit = dial.DomainResolver
@@ -34,7 +37,7 @@ func prepareImportedDialer(ctx context.Context, options any, node string, defaul
 		dial.DomainStrategy = 0
 	}
 	wrapper.ReplaceDialerOptions(dial)
-	if err := prepareDialer(options, node, defaults, resolver, graph, rewrite); err != nil {
+	if err := prepareDialerWithExternalDetour(options, node, defaults, resolver, graph, rewrite, override.Detour); err != nil {
 		return err
 	}
 	if explicit != nil {

@@ -336,7 +336,7 @@ func TestConcurrentRefreshAndDial(t *testing.T) {
 	wg.Wait()
 }
 
-func TestColdStartWithoutBootstrapFails(t *testing.T) {
+func TestColdStartWithoutBootstrapStartsEmpty(t *testing.T) {
 	ctx := testContext()
 	config := `{"log":{"disabled":true},"outbounds":[{"type":"subscription","tag":"sub","url":"http://127.0.0.1:1"}]}`
 	opts, err := json.UnmarshalExtendedContext[option.Options](ctx, []byte(config))
@@ -344,7 +344,11 @@ func TestColdStartWithoutBootstrapFails(t *testing.T) {
 	instance, err := box.New(box.Options{Options: opts, Context: ctx})
 	require.NoError(t, err)
 	defer instance.Close()
-	require.ErrorContains(t, instance.Start(), "bootstrap_http_client")
+	require.NoError(t, instance.Start())
+	s := getSubscription(t, ctx, "sub")
+	require.False(t, s.Status().Ready)
+	require.NotEmpty(t, s.Status().LastError)
+	require.Empty(t, s.All())
 }
 
 func TestHostGroupReferencesImportedMembers(t *testing.T) {

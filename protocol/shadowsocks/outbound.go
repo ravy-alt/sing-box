@@ -188,7 +188,7 @@ func (h *shadowsocksDialer) DialContext(ctx context.Context, network string, des
 		if err != nil {
 			return nil, err
 		}
-		return bufio.NewBindPacketConn(h.method.DialPacketConn(outConn), destination), nil
+		return bufio.NewBindPacketConn(&outboundPacketConn{h.method.DialPacketConn(outConn)}, destination), nil
 	default:
 		return nil, E.Extend(N.ErrUnknownNetwork, network)
 	}
@@ -202,5 +202,5 @@ func (h *shadowsocksDialer) ListenPacket(ctx context.Context, destination M.Sock
 	if err != nil {
 		return nil, err
 	}
-	return h.method.DialPacketConn(outConn), nil
+	return &outboundPacketConn{h.method.DialPacketConn(outConn)}, nil
 }

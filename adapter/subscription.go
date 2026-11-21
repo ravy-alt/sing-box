@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/sagernet/sing-box/option"
@@ -76,6 +77,21 @@ func IsSubscriptionSource(outbound Outbound) bool {
 type SubscriptionBootstrapTask struct {
 	Name string
 	Run  func(context.Context) error
+	// Only subscription downloads can be deferred. Required resources and
+	// invalid dependency graphs must still prevent publication/startup.
+	AllowUnavailable bool
+}
+
+// SubscriptionDownloadError distinguishes an unavailable remote source from
+// invalid configuration or a rejected candidate resource graph.
+type SubscriptionDownloadError struct{ Err error }
+
+func (e *SubscriptionDownloadError) Error() string { return e.Err.Error() }
+func (e *SubscriptionDownloadError) Unwrap() error { return e.Err }
+
+func IsSubscriptionDownloadError(err error) bool {
+	var downloadError *SubscriptionDownloadError
+	return errors.As(err, &downloadError)
 }
 
 func InitializeSubscriptions(ctx context.Context, manager OutboundManager, tasks ...SubscriptionBootstrapTask) error {
@@ -94,7 +110,7 @@ func initializeSubscriptions(ctx context.Context, manager OutboundManager, allow
 		if subscription, ok := outbound.(Subscription); ok {
 			_ = subscription.Restore() // Refresh reports the final error if no cache works.
 			if !subscription.Status().Ready {
-				pending = append(pending, SubscriptionBootstrapTask{subscription.Tag(), subscription.Refresh})
+				pending = append(pending, SubscriptionBootstrapTask{Name: subscription.Tag(), Run: subscription.Refresh, AllowUnavailable: true})
 			}
 		}
 	}
@@ -106,12 +122,22 @@ func initializeSubscriptions(ctx context.Context, manager OutboundManager, allow
 				return err
 			}
 			if err := task.Run(ctx); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 				next = append(next, task)
-				failures = append(failures, E.Cause(err, "subscription resource[", task.Name, "]"))
+				if !task.AllowUnavailable || !IsSubscriptionDownloadError(err) {
+					failures = append(failures, E.Cause(err, "subscription resource[", task.Name, "]"))
+				}
 			}
 		}
 		if len(next) == len(pending) {
-			return E.Cause(E.Errors(failures...), "initialize subscriptions: provide a usable cache or bootstrap_http_client independent of the unavailable subscription groups")
+			if len(failures) > 0 {
+				return E.Cause(E.Errors(failures...), "initialize subscriptions")
+			}
+			// Keep unavailable providers registered with empty members. Their
+			// background loops will retry, then notify every importing group.
+			break
 		}
 		pending = next
 	}

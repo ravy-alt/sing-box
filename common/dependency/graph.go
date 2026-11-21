@@ -59,6 +59,12 @@ func visitReferences(value reflect.Value, visit func(string, string) (string, er
 			if kind := field.Tag.Get("reference"); kind != "" {
 				var rewrite func(reflect.Value) error
 				rewrite = func(v reflect.Value) error {
+					if v.Kind() == reflect.Pointer {
+						if v.IsNil() {
+							return nil
+						}
+						return rewrite(v.Elem())
+					}
 					if v.Kind() == reflect.Slice {
 						for j := 0; j < v.Len(); j++ {
 							if err := rewrite(v.Index(j)); err != nil {

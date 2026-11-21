@@ -13,6 +13,7 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common"
+	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -153,7 +154,14 @@ func (h *Outbound) DialContext(ctx context.Context, network string, destination 
 		return h.createProxy(ctx, destination)
 	case N.NetworkUDP:
 		h.logger.InfoContext(ctx, "outbound UoT packet connection to ", destination)
-		return h.uotClient.DialContext(ctx, network, destination)
+		// Some AnyTLS servers always send addressed UoT replies, even when
+		// connect mode was requested. Use addressed mode in both directions
+		// and keep the fixed destination in the net.Conn adapter.
+		conn, err := h.uotClient.ListenPacket(ctx, destination)
+		if err != nil {
+			return nil, err
+		}
+		return bufio.NewBindPacketConn(conn, destination), nil
 	}
 	return nil, os.ErrInvalid
 }
