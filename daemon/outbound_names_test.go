@@ -86,4 +86,19 @@ func TestNativeControlPublicNames(t *testing.T) {
 	require.Equal(t, "香港-1", events[0].Connection.Outbound)
 	require.Equal(t, "策略", events[0].Connection.FromOutbound)
 	require.Equal(t, []string{"香港-1", "策略"}, events[0].Connection.ChainList)
+
+	// Removing a member must not let a different provider reuse the old name.
+	c := &nameTestNode{tag: "subscription/c/node"}
+	names.Register([]adapter.OutboundName{{Tag: c.Tag(), Name: "香港"}}, nil)
+	objects[c.Tag()] = c
+	require.NoError(t, manager.Create(ctx, nil, logger.NOP(), c.Tag(), "test", nil))
+	g.nodes = []adapter.Outbound{b, c}
+	require.Equal(t, "香港-2", names.Name(c.Tag()))
+	_, err = server.SelectOutbound(ctx, &SelectOutboundRequest{GroupTag: "策略", OutboundTag: "香港"})
+	require.Error(t, err)
+	require.Same(t, b, g.selected)
+	g.nodes = []adapter.Outbound{a, b, c}
+	_, err = server.SelectOutbound(ctx, &SelectOutboundRequest{GroupTag: "策略", OutboundTag: "香港"})
+	require.NoError(t, err)
+	require.Same(t, a, g.selected)
 }

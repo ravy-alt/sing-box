@@ -69,6 +69,22 @@
 
 ### Fields
 
+#### Dashboard delay tests and node identity
+
+`GET /group/{name}/delay?url=...&timeout=...` probes each immediate member using
+the requested HTTP or HTTPS URL, independently of automatic URL tests. Nested
+groups use their selected path. Members start concurrently, and successful
+results are returned even if other members time out. `timeout` is in milliseconds
+and must be between 1 and 60000. If every member fails, the endpoint returns 504.
+Results from a replaced subscription generation are discarded.
+
+Proxy objects also include the opaque `x-sing-box-revision` extension. It changes
+on core restart and on subscription graph publication, including changes to
+imported nodes, dialers and DNS resources. Clients must combine it with the
+backend identity and proxy name when caching capabilities such as IPv6 reachability.
+A graph update invalidates all capability results for that backend, even when a
+particular node's name is unchanged. The extension contains no configuration secrets.
+
 #### external_controller
 
 RESTful web API listening address. Clash API will be disabled if empty.

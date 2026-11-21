@@ -93,3 +93,15 @@ func TestFailedParentDoesNotReserveChildPublicNames(t *testing.T) {
 	require.Equal(t, "child", adapter.OutboundDisplayName(ctx, memberTag("sub", "child")))
 	require.Equal(t, "新节点", adapter.OutboundDisplayName(ctx, memberTag(memberTag("sub", "child"), "新节点")))
 }
+
+func TestPublicNamesReserveImplicitDirect(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"outbounds":[{"type":"test","tag":"direct"}]}`)
+	}))
+	defer remote.Close()
+	_, ctx := startBox(t, fmt.Sprintf(`{"log":{"disabled":true},"subscriptions":[{"tag":"source","url":%q,"http_client":{}}]}`, remote.URL))
+	names := adapter.OutboundNamesFromContext(ctx)
+	require.Equal(t, "direct", names.Tag("direct"), "the implicit host outbound must retain its control name")
+	require.Equal(t, "direct-1", names.Name(memberTag("source", "direct")))
+	require.Equal(t, memberTag("source", "direct"), names.Tag("direct-1"))
+}

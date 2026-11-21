@@ -60,6 +60,7 @@ func findProxyByName(server *Server) func(next http.Handler) http.Handler {
 
 func proxyInfo(server *Server, detour adapter.Outbound) *badjson.JSONObject {
 	var info badjson.JSONObject
+	info.Put("x-sing-box-revision", server.proxyRevision())
 	var clashType string
 	switch detour.Type() {
 	case C.TypeBlock:
@@ -241,7 +242,7 @@ func getProxyDelay(server *Server) func(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 
-		delay, err := urltest.URLTest(ctx, url, proxy)
+		delay, err := urltest.URLTest(server.probeContext(ctx), url, proxy)
 		if err == nil && delay == 0 {
 			delay = 1
 		}

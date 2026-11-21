@@ -3,12 +3,15 @@ package clashapi
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"net"
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -53,11 +56,26 @@ type Server struct {
 	urlTestHistory *urltest.HistoryStorage
 	clashMode      *clashmode.Manager
 	logDebug       bool
+	instanceID     string
+	instanceOnce   sync.Once
 
 	externalController       bool
 	externalUI               string
 	externalUIDownloadURL    string
 	externalUIDownloadDetour string
+}
+
+// The graph revision covers imported dialers and DNS dependencies as well as
+// nodes. It also changes across restarts, including a reload of the same tags.
+func (s *Server) proxyRevision() string {
+	s.instanceOnce.Do(func() { s.instanceID = rand.Text() })
+	var revision uint64
+	if s.ctx != nil {
+		if updates := service.PtrFromContext[adapter.GroupUpdates](s.ctx); updates != nil {
+			revision, _ = updates.State()
+		}
+	}
+	return s.instanceID + ":" + strconv.FormatUint(revision, 10)
 }
 
 func NewServer(ctx context.Context, logFactory log.ObservableFactory, options option.ClashAPIOptions) (adapter.LifecycleService, error) {

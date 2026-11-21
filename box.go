@@ -418,13 +418,20 @@ func New(options Options) (*Box, error) {
 		}
 	}
 	outboundManager.Initialize(func() (adapter.Outbound, error) {
-		return direct.NewOutbound(
+		directOutbound, err := direct.NewOutbound(
 			ctx,
 			router,
 			logFactory.NewLogger("outbound/direct"),
 			"direct",
 			option.DirectOutboundOptions{},
 		)
+		if err != nil {
+			return nil, err
+		}
+		// This implicit host outbound is created after static names are
+		// registered, but before any subscription names are published.
+		adapter.OutboundNamesFromContext(ctx).Register([]adapter.OutboundName{{Tag: directOutbound.Tag(), Name: directOutbound.Tag()}}, nil)
+		return directOutbound, nil
 	})
 	dnsTransportManager.Initialize(func() (adapter.DNSTransport, error) {
 		return dnsTransportRegistry.CreateDNSTransport(

@@ -148,6 +148,8 @@ func urlTest(ctx context.Context, link string, detour N.Dialer) (t uint16, err e
 		return
 	}
 	resp.Body.Close()
-	t = uint16(time.Since(start) / time.Millisecond)
+	// Zero means unavailable to Clash clients. Sub-millisecond successes must
+	// remain positive; clamp very slow probes instead of overflowing uint16.
+	t = uint16(max(1, min(time.Since(start)/time.Millisecond, 65535)))
 	return
 }

@@ -13,7 +13,55 @@ import (
 	N "github.com/sagernet/sing/common/network"
 )
 
-func (s *Subscription) PerformUpdateCheck() { /* Selection is updated with a complete generation's test results. */
+func (s *Subscription) PerformUpdateCheck() {
+	if s.options.Mode != C.TypeURLTest || s.history == nil {
+		return
+	}
+	members := s.reconcileMembers()
+	s.mu.Lock()
+	g := s.current
+	if s.closed || g == nil || !g.acquire() {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	defer g.release()
+	result := make(map[string]uint16)
+	networks := make(map[string][]string)
+	for _, tag := range members.Tags {
+		member, _ := g.outbounds.Outbound(tag)
+		networks[tag] = outboundNetworks(member, make(map[string]bool))
+		if h := s.history.LoadURLTestHistory(tag); h != nil && h.Delay > 0 {
+			result[tag] = h.Delay
+		}
+	}
+	s.mu.Lock()
+	if !s.closed && s.current == g {
+		s.members.Updates().Commit(members.Revision, func() {
+			s.selectMeasured(members.Tags, networks, result)
+		})
+	}
+	s.mu.Unlock()
+	s.notify()
+}
+
+// Called with s.mu held and the membership revision validated.
+func (s *Subscription) selectMeasured(tags []string, networks map[string][]string, result map[string]uint16) {
+	if s.options.Mode != C.TypeURLTest {
+		return
+	}
+	for network, selected := range map[string]*string{N.NetworkTCP: &s.selectedTCP, N.NetworkUDP: &s.selectedUDP} {
+		best, found := result[*selected]
+		found = found && slices.Contains(networks[*selected], network)
+		for _, tag := range tags {
+			if !slices.Contains(networks[tag], network) {
+				continue
+			}
+			if delay, ok := result[tag]; ok && (!found || int(delay)+int(s.options.Tolerance) < int(best)) {
+				*selected, best, found = tag, delay, true
+			}
+		}
+	}
 }
 
 func (s *Subscription) URLTest(ctx context.Context) (map[string]uint16, error) {
@@ -95,20 +143,7 @@ loop:
 					}
 				}
 			}
-			if s.options.Mode == C.TypeURLTest {
-				for network, selected := range map[string]*string{N.NetworkTCP: &s.selectedTCP, N.NetworkUDP: &s.selectedUDP} {
-					best, found := result[*selected]
-					found = found && slices.Contains(networks[*selected], network)
-					for _, tag := range members.Tags {
-						if !slices.Contains(networks[tag], network) {
-							continue
-						}
-						if delay, ok := result[tag]; ok && (!found || int(delay)+int(s.options.Tolerance) < int(best)) {
-							*selected, best, found = tag, delay, true
-						}
-					}
-				}
-			}
+			s.selectMeasured(members.Tags, networks, result)
 		})
 	}
 	s.mu.Unlock()
