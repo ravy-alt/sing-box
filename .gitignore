@@ -6,6 +6,10 @@
 /site/
 /bin/
 /dist/
+/subscriptions/
+/dashboard/
+/zashboard
+/mihomo.yaml
 /sing-box
 /sing-box.exe
 /build/
