@@ -151,7 +151,12 @@ func (c *Client) DNSCacheEntries() ([]adapter.DNSCacheEntry, error) {
 		entry := adapter.DNSCacheEntry{
 			ID: key.id(), Server: key.transportTag, Domain: FqdnToDomain(key.Name),
 			Type: dns.TypeToString[key.Qtype], Class: key.Qclass, Rcode: dns.RcodeToString[value.message.Rcode],
-			Answers: []string{}, Addresses: []string{}, Info: value.info,
+			Answers: []string{}, AnswerData: []string{}, Addresses: []string{}, Info: value.info,
+		}
+		// The root name consists only of the final dot. Keep it visible in the
+		// diagnostics API without changing domain normalization used by routing.
+		if key.Name == "." {
+			entry.Domain = "."
 		}
 		if entry.Type == "" {
 			entry.Type = "TYPE" + strconv.Itoa(int(key.Qtype))
@@ -165,6 +170,7 @@ func (c *Client) DNSCacheEntries() ([]adapter.DNSCacheEntry, error) {
 		}
 		for _, rr := range value.message.Answer {
 			entry.Answers = append(entry.Answers, rr.String())
+			entry.AnswerData = append(entry.AnswerData, strings.TrimPrefix(rr.String(), rr.Header().String()))
 			switch address := rr.(type) {
 			case *dns.A:
 				entry.Addresses = append(entry.Addresses, address.A.String())

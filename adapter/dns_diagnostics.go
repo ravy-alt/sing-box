@@ -50,6 +50,7 @@ type DNSCacheEntry struct {
 	Class        uint16       `json:"class"`
 	ClientSubnet string       `json:"clientSubnet,omitempty"`
 	Answers      []string     `json:"answers"`
+	AnswerData   []string     `json:"answerData"`
 	Addresses    []string     `json:"addresses"`
 	Rcode        string       `json:"rcode"`
 	ExpiresAt    *time.Time   `json:"expiresAt"`

@@ -159,3 +159,43 @@ func TestDNSCacheConcurrentInspection(t *testing.T) {
 	}
 	group.Wait()
 }
+
+// The management API must retain root names and present RDATA independently of
+// the stored RR header (whose TTL is not the remaining cache lifetime).
+func TestDNSCachePresentation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		question string
+		qtype    uint16
+		records  []string
+		data     []string
+	}{
+		{"root", ".", dns.TypeNS, []string{". 86400 IN NS a.root-servers.net.", ". 86400 IN NS b.root-servers.net."}, []string{"a.root-servers.net.", "b.root-servers.net."}},
+		{"address", "example.com.", dns.TypeA, []string{"example.com. 300 IN A 192.0.2.1"}, []string{"192.0.2.1"}},
+		{"alias", "example.com.", dns.TypeCNAME, []string{"example.com. 300 IN CNAME target.example."}, []string{"target.example."}},
+		{"service", "_http._tcp.example.com.", dns.TypeSRV, []string{"_http._tcp.example.com. 300 IN SRV 10 20 80 target.example."}, []string{"10 20 80 target.example."}},
+		{"text", "example.com.", dns.TypeTXT, []string{`example.com. 300 IN TXT "a b" "c d"`}, []string{`"a b" "c d"`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := diagnosticClient()
+			key := dnsCacheKey{Question: dns.Question{Name: tc.question, Qtype: tc.qtype, Qclass: dns.ClassINET}, transportTag: "one"}
+			message := new(dns.Msg).SetQuestion(tc.question, tc.qtype)
+			for _, text := range tc.records {
+				rr, err := dns.NewRR(text)
+				require.NoError(t, err)
+				message.Answer = append(message.Answer, rr)
+			}
+			client.cache.Add(key, &dnsCacheValue{message: message, expires: time.Now().Add(time.Minute)})
+			entries, err := client.DNSCacheEntries()
+			require.NoError(t, err)
+			require.Len(t, entries, 1)
+			require.NotEmpty(t, entries[0].Domain)
+			if tc.question == "." {
+				require.Equal(t, ".", entries[0].Domain)
+			}
+			require.Equal(t, tc.data, entries[0].AnswerData)
+			require.Len(t, entries[0].Answers, len(tc.records), "keep raw records available for inspection")
+			require.Empty(t, entries[0].Info.Purpose, "unknown historical metadata must not become an internal lookup")
+		})
+	}
+}
