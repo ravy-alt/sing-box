@@ -70,9 +70,6 @@ func proxyInfo(server *Server, detour adapter.Outbound, links ...string) *badjso
 		clashType = C.ProxyDisplayName(nativeType)
 	}
 	info.Put("type", clashType)
-	// Keep the Clash-compatible type for existing clients, while allowing
-	// dashboards to distinguish native types such as smart-urltest.
-	info.Put("x-sing-box-type", nativeType)
 	info.Put("name", adapter.OutboundDisplayName(server.ctx, detour.Tag()))
 	if member, ok := detour.(adapter.ProvidedOutbound); ok {
 		info.Put("provider-name", adapter.OutboundDisplayName(server.ctx, member.ProviderTag()))

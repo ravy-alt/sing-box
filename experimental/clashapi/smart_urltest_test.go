@@ -43,11 +43,11 @@ func TestSmartGroupAPIUsesConfiguredRankingAndProvidesCacheClear(t *testing.T) {
 	require.Equal(t, 200, w.Code)
 	var info map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &info))
-	require.Equal(t, "URLTest", info["type"])
-	require.Equal(t, "smart-urltest", info["x-sing-box-type"])
+	require.Equal(t, "SmartURLTest", info["type"])
+	require.NotContains(t, info, "x-sing-box-type")
 	proxy := readProbeInfo(t, s, "smart", "")
-	require.Equal(t, "URLTest", proxy["type"])
-	require.Equal(t, "smart-urltest", proxy["x-sing-box-type"])
+	require.Equal(t, "SmartURLTest", proxy["type"])
+	require.NotContains(t, proxy, "x-sing-box-type")
 }
 
 type dynamicProbeGroup struct {

@@ -118,8 +118,10 @@ func ProxyDisplayName(proxyType string) string {
 		return "Selector"
 	case TypeSubscription:
 		return "Selector"
-	case TypeURLTest, TypeSmartURLTest:
+	case TypeURLTest:
 		return "URLTest"
+	case TypeSmartURLTest:
+		return "SmartURLTest"
 	default:
 		return "Unknown"
 	}
