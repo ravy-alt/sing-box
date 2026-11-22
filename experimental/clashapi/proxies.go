@@ -61,14 +61,18 @@ func findProxyByName(server *Server) func(next http.Handler) http.Handler {
 func proxyInfo(server *Server, detour adapter.Outbound, links ...string) *badjson.JSONObject {
 	var info badjson.JSONObject
 	info.Put("x-sing-box-revision", server.proxyRevision())
+	nativeType := detour.Type()
 	var clashType string
-	switch detour.Type() {
+	switch nativeType {
 	case C.TypeBlock:
 		clashType = "Reject"
 	default:
-		clashType = C.ProxyDisplayName(detour.Type())
+		clashType = C.ProxyDisplayName(nativeType)
 	}
 	info.Put("type", clashType)
+	// Keep the Clash-compatible type for existing clients, while allowing
+	// dashboards to distinguish native types such as smart-urltest.
+	info.Put("x-sing-box-type", nativeType)
 	info.Put("name", adapter.OutboundDisplayName(server.ctx, detour.Tag()))
 	if member, ok := detour.(adapter.ProvidedOutbound); ok {
 		info.Put("provider-name", adapter.OutboundDisplayName(server.ctx, member.ProviderTag()))
