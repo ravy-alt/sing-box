@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -18,7 +19,7 @@ import (
 func TestSmartGroupAPIUsesConfiguredRankingAndProvidesCacheClear(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) }))
 	defer target.Close()
-	config := fmt.Sprintf(`{"log":{"disabled":true},"outbounds":[{"type":"http","tag":"bad","server":"127.0.0.1","server_port":1},{"type":"direct","tag":"node"},{"type":"smart-urltest","tag":"smart","outbounds":["bad","node"],"url":%q}]}`, target.URL)
+	config := fmt.Sprintf(`{"log":{"disabled":true},"outbounds":[{"type":"http","tag":"bad","server":"127.0.0.1","server_port":1},{"type":"direct","tag":"node"},{"type":"smart-urltest","tag":"smart","outbounds":["bad","node"],"url":%q},{"type":"selector","tag":"select","outbounds":["node","smart"]}]}`, target.URL)
 	_, s, _ := startNamedSubscriptionBox(t, config)
 	w := groupRequest(s, "smart", "", "3000")
 	require.Equal(t, 200, w.Code, w.Body.String())
@@ -48,6 +49,21 @@ func TestSmartGroupAPIUsesConfiguredRankingAndProvidesCacheClear(t *testing.T) {
 	proxy := readProbeInfo(t, s, "smart", "")
 	require.Equal(t, "SmartURLTest", proxy["type"])
 	require.NotContains(t, proxy, "x-sing-box-type")
+	require.Equal(t, false, proxy["selectable"])
+	require.Equal(t, false, info["selectable"])
+	require.Equal(t, true, readProbeInfo(t, s, "select", "")["selectable"])
+	selectNode := func(group, node string) int {
+		t.Helper()
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPut, "/"+group, strings.NewReader(fmt.Sprintf(`{"name":%q}`, node)))
+		request.Header.Set("Content-Type", "application/json")
+		proxyRouter(s, nil).ServeHTTP(response, request)
+		return response.Code
+	}
+	require.Equal(t, http.StatusNoContent, selectNode("select", "smart"))
+	require.Equal(t, "smart", readProbeInfo(t, s, "select", "")["now"])
+	require.Equal(t, http.StatusBadRequest, selectNode("smart", "bad"))
+	require.Equal(t, "node", readProbeInfo(t, s, "smart", "")["now"])
 }
 
 type dynamicProbeGroup struct {

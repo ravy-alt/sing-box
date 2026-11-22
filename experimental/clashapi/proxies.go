@@ -104,6 +104,8 @@ func proxyInfo(server *Server, detour adapter.Outbound, links ...string) *badjso
 	}
 	info.Put("extra", extra)
 	if group, isGroup := adapter.OutboundGroupFor(detour); isGroup {
+		_, selectable := group.(adapter.SelectableOutboundGroup)
+		info.Put("selectable", selectable)
 		var now string
 		if selected := group.Selected(N.NetworkTCP); selected != nil {
 			now = adapter.OutboundDisplayName(server.ctx, selected.Tag())
@@ -144,12 +146,13 @@ func getProxies(server *Server) func(w http.ResponseWriter, r *http.Request) {
 
 		// fix clash dashboard
 		proxyMap.Put("GLOBAL", map[string]any{
-			"type":    "Fallback",
-			"name":    "GLOBAL",
-			"udp":     true,
-			"history": []*adapter.URLTestHistory{},
-			"all":     allProxies,
-			"now":     defaultTag,
+			"type":       "Fallback",
+			"name":       "GLOBAL",
+			"udp":        true,
+			"history":    []*adapter.URLTestHistory{},
+			"all":        allProxies,
+			"now":        defaultTag,
+			"selectable": false,
 		})
 
 		for i, detour := range outbounds {
