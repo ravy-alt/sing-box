@@ -16,9 +16,9 @@ func (s *Server) testGroup(ctx context.Context, outboundGroup adapter.OutboundGr
 	if link == "" {
 		link = urltest.OutboundTestURL(outboundGroup)
 	}
-	if smart, ok := outboundGroup.(adapter.SmartURLTestGroup); ok && (link == "" || urltest.NormalizeURL(link) == urltest.NormalizeURL(smart.TestURL())) {
-		return smart.URLTest(ctx)
-	}
+	// The panel's delay endpoint reports TCP latency. Joining a Smart group's
+	// automatic TCP+UDP round can hide a successful TCP result behind a UDP
+	// timeout; UDP health is measured independently by /udp-delay.
 	link = urltest.NormalizeURL(link)
 	var updates *adapter.GroupUpdates
 	var revision uint64

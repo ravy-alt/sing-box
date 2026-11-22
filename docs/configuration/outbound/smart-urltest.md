@@ -73,11 +73,11 @@ Existing connections are retained when rankings change. There is no retry or rep
 | `udp_failure_window` | `1m` | Sliding window for completed UDP observations. |
 | `udp_min_sessions` | `10` | Minimum observations before evaluating the failure ratio. |
 | `udp_failure_ratio` | `0.8` | Request a test when at least this fraction of observed sessions have no reply, then reset the sample window. |
-| `min_test_interval` | `30s` | Minimum spacing between starts of automatic test rounds. API tests also advance this cooldown. |
+| `min_test_interval` | `30s` | Minimum spacing between starts of automatic test rounds. Dashboard TCP probes are independent of this cooldown. |
 | `test_concurrency` | `10` | Maximum concurrently tested members per group. Each member runs an HTTP probe with a 15-second limit, then, on success, a UDP probe bounded by `udp_test.timeout`. |
 | `max_concurrent_dials` | `64` | Maximum active underlying business/fallback dial calls per group. Waiting for capacity shares the attempt timeout. |
 
-Automatic requests are coalesced and rate limited. Concurrent API requests share an active round; explicit API requests may start a new round without waiting for the automatic cooldown. URL-test traffic is marked through nested groups and never contributes to business failure statistics or destination affinity. Cancelled attempts and local capacity exhaustion do not count as failed nodes.
+Automatic requests are coalesced and rate limited. Dashboard TCP probes run independently, without waiting for the automatic UDP phase or cooldown. URL-test traffic is marked through nested groups and never contributes to business failure statistics or destination affinity. Cancelled attempts and local capacity exhaustion do not count as failed nodes.
 
 UDP observations cover both ordinary socket methods and buffered packet methods. Idle sessions are ignored. Each session contributes at most once per UDP window; long-lived sessions are sampled again in later windows. Closing an unanswered session does not erase its pending observation. Pending observations are limited to 10000 per group, and excess observations are skipped until capacity returns. A single timer services the observations, and 64 time buckets bound sliding-window memory. The window's resolution is approximately `udp_failure_window / 64`, with a minimum of 1 ms.
 
@@ -87,7 +87,7 @@ Each round tests UDP on the final nodes whose TCP probes succeeded. Omitting `ud
 
 Clash-compatible API:
 
-- `GET /group/{name}/delay?timeout=5000`: test the configured URL and update rankings. Supplying the same configured `url` has the same effect. Successful partial results can be returned at the request deadline while the shared round finishes in the background.
+- `GET /group/{name}/delay?timeout=5000`: test TCP using the configured URL and update rankings. Supplying the same configured `url` has the same effect. The request has its own deadline and never waits for an automatic UDP probe.
 - A different `url` runs the existing independent dashboard probe, for example an IPv6 test; it does not overwrite this group's primary ranking.
 - `DELETE /group/{name}/cache`: clear the named smart group's entire destination cache. Returns 204; a non-smart outbound returns 400 and a missing name returns 404.
 - `DELETE /connections/{id}`: clear the connection's destination bindings in every smart group actually used by its path, then close the connection. Clearing during a pending dial also invalidates the eventual binding.
@@ -111,4 +111,4 @@ Independent dashboard probes obey the requested `timeout`, including HTTP deadli
 
 `GET /proxies/{name}/udp-delay?server=8.8.8.8&port=53&domain=example.com&timeout=5000` performs a real UDP DNS exchange (timeout in milliseconds). Omitted parameters use the Smart group configuration or the node defaults. It recursively pins the current TCP-selected leaf and probes UDP through that exact node, without borrowing a fallback. Responses include `alive`, `delay`, `time`, `outbound` and probe parameters. A completed failed test returns HTTP 200 with `alive: false`; invalid parameters return 400, changed membership 409, and inability to start 503.
 
-`/version` advertises `udp-probe-v1`. Proxy metadata includes `udpTest` settings and the current leaf’s `udpHistory`. UDP histories are keyed by node, server, port, domain and timeout, bounded to 64 profiles per node. Node retirement clears them; old-generation completions cannot overwrite replacements, and cancellation preserves prior observations. The legacy `udp` field remains a protocol declaration. The dashboard uses measured history to show unknown, successful latency or failure; clicking it performs a new probe. Normal node, group and provider dashboard tests include UDP probes too.
+`/version` advertises `udp-probe-v1`. Proxy metadata includes `udpTest` settings and the current leaf’s `udpHistory`. UDP histories are keyed by node, server, port, domain and timeout, bounded to 64 profiles per node. Node retirement clears them; old-generation completions cannot overwrite replacements, and cancellation preserves prior observations. The legacy `udp` field remains a protocol declaration. The dashboard retains its original node-card layout and TCP latency indicator. Its existing inline UDP label appears only after a successful real UDP test; unknown or failed UDP is hidden. Normal node, group and provider dashboard tests also start background UDP probes, without delaying TCP results or loading states.

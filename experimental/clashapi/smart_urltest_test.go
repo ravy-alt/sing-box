@@ -10,11 +10,36 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSmartGroupTCPDelayDoesNotWaitForAutomaticUDP(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) }))
+	defer target.Close()
+	blackhole, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer blackhole.Close()
+	config := fmt.Sprintf(`{"log":{"disabled":true},"outbounds":[{"type":"direct","tag":"node"},{"type":"smart-urltest","tag":"smart","outbounds":["node"],"url":%q,"udp_test":{"server":"127.0.0.1","server_port":%d,"timeout":"5s"}}]}`, target.URL, blackhole.LocalAddr().(*net.UDPAddr).Port)
+	_, s, _ := startNamedSubscriptionBox(t, config)
+	// Hold an actual automatic round in its UDP phase. A panel TCP request
+	// must succeed before its short deadline, without joining that round.
+	require.NoError(t, blackhole.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, _, err = blackhole.ReadFrom(make([]byte, 4096))
+	require.NoError(t, err)
+	for _, link := range []string{"", target.URL} {
+		w := groupRequest(s, "smart", link, "500")
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var delays map[string]uint16
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &delays))
+		require.Positive(t, delays["node"])
+		require.NotNil(t, s.urlTestHistory.LoadURLTestHistory("node", target.URL))
+		require.Empty(t, s.urlTestHistory.UDPHistories("node"), "TCP must not invent a UDP result")
+	}
+}
 
 func TestSmartGroupAPIUsesConfiguredRankingAndProvidesCacheClear(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) }))
