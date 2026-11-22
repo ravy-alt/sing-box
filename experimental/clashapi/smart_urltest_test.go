@@ -96,3 +96,22 @@ func TestDynamicGroupProbePinsSelectedLeafWithoutBusinessFallback(t *testing.T) 
 	_, err := s.testGroup(context.Background(), outer, target.URL)
 	require.Error(t, err)
 }
+
+func TestGroupMetadataKeepsEmptyGroupsAndGlobalSelectionConsistent(t *testing.T) {
+	_, s, _ := startNamedSubscriptionBox(t, `{"log":{"disabled":true},"outbounds":[{"type":"direct","tag":"direct"}]}`)
+	w := httptest.NewRecorder()
+	proxyRouter(s, nil).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	require.Equal(t, 200, w.Code)
+	var info struct {
+		Proxies map[string]map[string]any `json:"proxies"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &info))
+	global := info.Proxies["GLOBAL"]
+	require.Contains(t, global["all"], global["now"])
+	require.Equal(t, false, global["selectable"])
+
+	empty := &testProvider{name: "empty"}
+	s, _ = probeServer(t, []adapter.Outbound{empty})
+	proxy := readProbeInfo(t, s, "empty", "")
+	require.Equal(t, []any{}, proxy["all"])
+}

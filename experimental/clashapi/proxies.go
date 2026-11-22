@@ -111,7 +111,11 @@ func proxyInfo(server *Server, detour adapter.Outbound, links ...string) *badjso
 			now = adapter.OutboundDisplayName(server.ctx, selected.Tag())
 		}
 		info.Put("now", now)
-		info.Put("all", adapter.OutboundDisplayNames(server.ctx, group.All()))
+		all := adapter.OutboundDisplayNames(server.ctx, group.All())
+		if all == nil {
+			all = []string{}
+		}
+		info.Put("all", all)
 	}
 	return &info
 }
@@ -139,6 +143,11 @@ func getProxies(server *Server) func(w http.ResponseWriter, r *http.Request) {
 		}
 
 		defaultTag := adapter.OutboundDisplayName(server.ctx, server.outbound.Default().Tag())
+		// Direct/reject are normally omitted from GLOBAL, but its actual current
+		// selection must remain a member for recursive dashboard resolution.
+		if defaultTag != "" && !common.Contains(allProxies, defaultTag) {
+			allProxies = append(allProxies, defaultTag)
+		}
 
 		sort.SliceStable(allProxies, func(i, j int) bool {
 			return allProxies[i] == defaultTag
