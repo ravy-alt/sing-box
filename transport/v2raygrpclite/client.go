@@ -67,7 +67,12 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 	}
 	if tlsConfig == nil {
 		client.transport.DialTLSContext = func(ctx context.Context, network, addr string, cfg *tls.STDConfig) (net.Conn, error) {
-			return dialer.DialContext(adapter.ContextForMultiplexSession(ctx), network, M.ParseSocksaddr(addr))
+			ctx = adapter.ContextForMultiplexSession(ctx)
+			conn, err := dialer.DialContext(ctx, network, M.ParseSocksaddr(addr))
+			if err != nil {
+				return nil, err
+			}
+			return adapter.WithTransportTrace(conn, adapter.ContextFrom(ctx).OutboundTrace), nil
 		}
 	} else {
 		if len(tlsConfig.NextProtos()) == 0 {
@@ -75,7 +80,12 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 		}
 		tlsDialer := tls.NewDialer(dialer, tlsConfig)
 		client.transport.DialTLSContext = func(ctx context.Context, network, addr string, cfg *tls.STDConfig) (net.Conn, error) {
-			return tlsDialer.DialTLSContext(adapter.ContextForMultiplexSession(ctx), M.ParseSocksaddr(addr))
+			ctx = adapter.ContextForMultiplexSession(ctx)
+			conn, err := tlsDialer.DialTLSContext(ctx, M.ParseSocksaddr(addr))
+			if err != nil {
+				return nil, err
+			}
+			return adapter.WithTransportTrace(conn, adapter.ContextFrom(ctx).OutboundTrace), nil
 		}
 	}
 
@@ -111,6 +121,7 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 	// gRPC servers send the response headers together with the first message, so RoundTrip
 	// returning does not mark the stream as established; the request headers being written does.
 	request = request.WithContext(httptrace.WithClientTrace(requestCtx, &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) { adapter.TraceTransportConn(ctx, info.Conn, c) },
 		WroteHeaders: func() {
 			handshakeTimer.Stop()
 		},

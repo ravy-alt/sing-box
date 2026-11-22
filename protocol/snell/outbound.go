@@ -54,6 +54,10 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 		return nil, err
 	}
 	serverAddr := options.ServerOptions.Build()
+	clientDialer := outboundDialer
+	if options.Reuse {
+		clientDialer = &tracedClientDialer{outboundDialer}
+	}
 	var client snellClient
 	switch options.Version {
 	case 4:
@@ -68,7 +72,7 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 			Reuse:    options.Reuse,
 			ObfsMode: obfsMode,
 			ObfsHost: options.ObfsOptions.ObfsHost,
-			Dialer:   outboundDialer,
+			Dialer:   clientDialer,
 			Server:   serverAddr,
 		})
 	case 6:
@@ -82,7 +86,7 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 			UserKey: []byte(options.UserKey),
 			Mode:    mode,
 			Reuse:   options.Reuse,
-			Dialer:  outboundDialer,
+			Dialer:  clientDialer,
 			Server:  serverAddr,
 		})
 	case 0:
@@ -113,7 +117,11 @@ func (h *Outbound) DialContext(ctx context.Context, network string, destination 
 	case N.NetworkTCP:
 		h.logger.InfoContext(ctx, "outbound connection to ", destination)
 		if h.reuse {
-			return h.client.DialContext(adapter.ContextForMultiplexSession(ctx), destination)
+			conn, err := h.client.DialContext(adapter.ContextForMultiplexSession(ctx), destination)
+			if err == nil {
+				adapter.TraceTransportConn(ctx, conn)
+			}
+			return conn, err
 		}
 		return h.client.DialContext(ctx, destination)
 	case N.NetworkUDP:
@@ -131,6 +139,17 @@ func (h *Outbound) DialContext(ctx context.Context, network string, destination 
 	default:
 		return nil, E.Extend(N.ErrUnknownNetwork, network)
 	}
+}
+
+type tracedClientDialer struct{ N.Dialer }
+
+func (d *tracedClientDialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	ctx = adapter.ContextForMultiplexSession(ctx)
+	conn, err := d.Dialer.DialContext(ctx, network, destination)
+	if err != nil {
+		return nil, err
+	}
+	return adapter.WithTransportTrace(conn, adapter.ContextFrom(ctx).OutboundTrace), nil
 }
 
 func (h *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {

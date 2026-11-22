@@ -8,6 +8,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-mux"
+	"github.com/sagernet/sing/common"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/logger"
 	M "github.com/sagernet/sing/common/metadata"
@@ -35,6 +36,19 @@ func NewClientWithOptions(dialer N.Dialer, logger logger.Logger, options option.
 		}
 	}
 	return mux.NewClient(mux.Options{
+		SessionMetadata: func(_ context.Context, conn net.Conn) any {
+			if carrier, ok := common.Cast[adapter.OutboundTraceCarrier](conn); ok {
+				return carrier.OutboundTrace()
+			}
+			return nil
+		},
+		SessionSelected: func(ctx context.Context, metadata any) {
+			if transport, ok := metadata.(*adapter.OutboundTrace); ok {
+				if inbound := adapter.ContextFrom(ctx); inbound != nil {
+					inbound.OutboundTrace.MergeTransport(transport)
+				}
+			}
+		},
 		Dialer:         &clientDialer{dialer},
 		Logger:         logger,
 		Protocol:       options.Protocol,
@@ -51,7 +65,12 @@ type clientDialer struct {
 }
 
 func (d *clientDialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
-	return d.Dialer.DialContext(adapter.ContextForMultiplexSession(ctx), network, destination)
+	ctx = adapter.ContextForMultiplexSession(ctx)
+	conn, err := d.Dialer.DialContext(ctx, network, destination)
+	if err != nil {
+		return nil, err
+	}
+	return adapter.WithTransportTrace(conn, adapter.ContextFrom(ctx).OutboundTrace), nil
 }
 
 func (d *clientDialer) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {

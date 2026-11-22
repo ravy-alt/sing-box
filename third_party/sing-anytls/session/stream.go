@@ -28,6 +28,10 @@ type Stream struct {
 	reportOnce sync.Once
 }
 
+// TransportConn identifies the exact shared transport used by this stream.
+// It is intentionally separate from Upstream: bypassing stream framing is invalid.
+func (s *Stream) TransportConn() net.Conn { return s.sess.conn }
+
 // newStream initiates a Stream struct
 func newStream(id uint32, sess *Session) *Stream {
 	s := new(Stream)

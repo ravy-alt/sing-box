@@ -15,6 +15,9 @@ import (
 type URLTestHistory struct {
 	Time  time.Time `json:"time"`
 	Delay uint16    `json:"delay"`
+	URL   string    `json:"url"`
+	// Outbound is the actual selected protocol node, excluding its transport detour.
+	Outbound string `json:"outbound,omitempty"`
 }
 
 type V2RayServer interface {

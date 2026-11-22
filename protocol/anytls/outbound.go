@@ -123,6 +123,11 @@ func (h *Outbound) createProxy(ctx context.Context, destination M.Socksaddr) (ne
 		conn.Close()
 		return nil, err
 	}
+	if metadata := adapter.ContextFrom(ctx); metadata != nil {
+		if carrier, ok := common.Cast[adapter.OutboundTraceCarrier](conn.(*session.Stream).TransportConn()); ok {
+			metadata.OutboundTrace.MergeTransport(carrier.OutboundTrace())
+		}
+	}
 	return conn, nil
 }
 
@@ -137,7 +142,12 @@ func (d anytlsDialer) ListenPacket(ctx context.Context, destination M.Socksaddr)
 }
 
 func (h *Outbound) dialOut(ctx context.Context) (net.Conn, error) {
-	return h.dialer.DialTLSContext(adapter.ContextForMultiplexSession(ctx), h.server)
+	ctx = adapter.ContextForMultiplexSession(ctx)
+	conn, err := h.dialer.DialTLSContext(ctx, h.server)
+	if err != nil {
+		return nil, err
+	}
+	return adapter.WithTransportTrace(conn, adapter.ContextFrom(ctx).OutboundTrace), nil
 }
 
 func (h *Outbound) MultiplexEnabled() bool {

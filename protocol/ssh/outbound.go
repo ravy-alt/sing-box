@@ -39,6 +39,7 @@ var (
 )
 
 type Outbound struct {
+	clientTrace *adapter.OutboundTrace
 	outbound.Adapter
 	logger            logger.ContextLogger
 	dialer            N.Dialer
@@ -138,10 +139,12 @@ func (s *Outbound) connect(ctx context.Context) (client *ssh.Client, err error) 
 
 	if s.client != nil {
 		s.streams++
+		adapter.TraceSessionSelection(ctx, s.clientTrace)
 		return s.client, nil
 	}
 
-	conn, err := s.dialer.DialContext(adapter.ContextForMultiplexSession(ctx), N.NetworkTCP, s.serverAddr)
+	sessionCtx := adapter.ContextForMultiplexSession(ctx)
+	conn, err := s.dialer.DialContext(sessionCtx, N.NetworkTCP, s.serverAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -193,6 +196,8 @@ func (s *Outbound) connect(ctx context.Context) (client *ssh.Client, err error) 
 
 	client = ssh.NewClient(clientConn, chans, reqs)
 
+	s.clientTrace = adapter.ContextFrom(sessionCtx).OutboundTrace
+	adapter.TraceSessionSelection(ctx, s.clientTrace)
 	s.clientConn = conn
 	s.client = client
 	s.streams = 1

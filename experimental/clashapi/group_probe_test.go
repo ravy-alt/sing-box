@@ -54,7 +54,7 @@ func TestURLTestGroupUsesDashboardURL(t *testing.T) {
 	auto, _ := s.outbound.Outbound("auto")
 	control := auto.(adapter.OutboundGroup)
 	require.Equal(t, "bad", control.Selected("tcp").Tag())
-	for _, name := range []string{"auto", "outer"} {
+	for _, name := range []string{"auto"} {
 		w := groupRequest(s, name, requested.URL+"/requested?ipv6=1", "1000")
 		require.Equal(t, 200, w.Code, w.Body.String())
 		var result map[string]uint16
@@ -63,9 +63,9 @@ func TestURLTestGroupUsesDashboardURL(t *testing.T) {
 		for _, delay := range result {
 			require.Positive(t, delay, "successful probes cannot be encoded as unavailable")
 		}
-		require.Equal(t, "node", control.Selected("tcp").Tag(), "manual results must update automatic selection")
+		require.Equal(t, "bad", control.Selected("tcp").Tag(), "a different test URL must not change the configured ranking")
 	}
-	require.EqualValues(t, 2, requestedHits.Load())
+	require.EqualValues(t, 1, requestedHits.Load())
 	// An unreachable requested target must not succeed using the configured URL
 	// or a previous history entry, including through a nested group.
 	for _, name := range []string{"auto", "outer"} {
@@ -135,7 +135,8 @@ func TestGroupProbeSlowMembersDoNotStarveHealthyNodes(t *testing.T) {
 	require.Len(t, result, 1)
 	require.Positive(t, result["healthy"])
 	for _, node := range nodes[:31] {
-		require.Nil(t, s.urlTestHistory.LoadURLTestHistory(node.Tag()), "timed out nodes must lose old successes")
+		require.Nil(t, s.urlTestHistory.LoadURLTestHistory(node.Tag(), target.URL), "the queried URL must not retain a success")
+		require.NotNil(t, s.urlTestHistory.LoadURLTestHistory(node.Tag()), "other URLs must remain intact")
 	}
 }
 
@@ -207,7 +208,7 @@ func TestGroupProbePinsSelectedDialerToHistory(t *testing.T) {
 	require.Equal(t, 200, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), `"nested":`)
 	require.Zero(t, nested.dialed.Load())
-	require.NotNil(t, s.urlTestHistory.LoadURLTestHistory("selected"))
+	require.NotNil(t, s.urlTestHistory.LoadURLTestHistory("selected", target.URL))
 }
 
 func TestProxyRevisionChangesOnRefreshReaddAndRestart(t *testing.T) {

@@ -201,3 +201,7 @@ require (
 
 // Local close-state synchronization fixes; see third_party/sing-anytls/PATCHES.txt.
 replace github.com/anytls/sing-anytls => ./third_party/sing-anytls
+
+replace github.com/sagernet/sing-mux => ./third_party/sing-mux
+
+replace github.com/sagernet/sing-quic => ./third_party/sing-quic

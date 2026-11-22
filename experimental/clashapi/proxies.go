@@ -58,7 +58,7 @@ func findProxyByName(server *Server) func(next http.Handler) http.Handler {
 	}
 }
 
-func proxyInfo(server *Server, detour adapter.Outbound) *badjson.JSONObject {
+func proxyInfo(server *Server, detour adapter.Outbound, links ...string) *badjson.JSONObject {
 	var info badjson.JSONObject
 	info.Put("x-sing-box-revision", server.proxyRevision())
 	var clashType string
@@ -74,12 +74,34 @@ func proxyInfo(server *Server, detour adapter.Outbound) *badjson.JSONObject {
 		info.Put("provider-name", adapter.OutboundDisplayName(server.ctx, member.ProviderTag()))
 	}
 	info.Put("udp", common.Contains(detour.Network(), N.NetworkUDP))
-	delayHistory := server.urlTestHistory.LoadURLTestHistory(group.RealTag(detour, N.NetworkTCP))
-	if delayHistory != nil {
-		info.Put("history", []*adapter.URLTestHistory{delayHistory})
-	} else {
-		info.Put("history", []*adapter.URLTestHistory{})
+	link := urltest.OutboundTestURL(detour)
+	if len(links) > 0 && links[0] != "" {
+		link = urltest.NormalizeURL(links[0])
 	}
+	info.Put("testUrl", urltest.OutboundTestURL(detour))
+	leaf := urltest.SelectedLeaf(detour)
+	var targets []string
+	if leaf != nil {
+		targets = server.urlTestHistory.URLs(leaf.Tag())
+	}
+	makeHistory := func(link string) []*adapter.URLTestHistory {
+		if leaf == nil {
+			return []*adapter.URLTestHistory{}
+		}
+		if h := server.urlTestHistory.LoadURLTestHistory(leaf.Tag(), link); h != nil {
+			copy := *h
+			copy.Outbound = adapter.OutboundDisplayName(server.ctx, copy.Outbound)
+			return []*adapter.URLTestHistory{&copy}
+		}
+		return []*adapter.URLTestHistory{}
+	}
+	info.Put("history", makeHistory(link))
+	extra := make(map[string]any)
+	for _, target := range append(targets, link) {
+		history := makeHistory(target)
+		extra[target] = render.M{"history": history, "alive": len(history) > 0}
+	}
+	info.Put("extra", extra)
 	if group, isGroup := adapter.OutboundGroupFor(detour); isGroup {
 		var now string
 		if selected := group.Selected(N.NetworkTCP); selected != nil {
@@ -136,7 +158,7 @@ func getProxies(server *Server) func(w http.ResponseWriter, r *http.Request) {
 			} else {
 				tag = adapter.OutboundDisplayName(server.ctx, detour.Tag())
 			}
-			proxyMap.Put(tag, proxyInfo(server, detour))
+			proxyMap.Put(tag, proxyInfo(server, detour, r.URL.Query().Get("url")))
 		}
 		var responseMap badjson.JSONObject
 		responseMap.Put("proxies", &proxyMap)
@@ -153,7 +175,7 @@ func getProxies(server *Server) func(w http.ResponseWriter, r *http.Request) {
 func getProxy(server *Server) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		proxy := r.Context().Value(CtxKeyProxy).(adapter.Outbound)
-		response, err := proxyInfo(server, proxy).MarshalJSON()
+		response, err := proxyInfo(server, proxy, r.URL.Query().Get("url")).MarshalJSON()
 		if err != nil {
 			render.Status(r, http.StatusInternalServerError)
 			render.JSON(w, r, newError(err.Error()))
@@ -231,6 +253,9 @@ func getProxyDelay(server *Server) func(w http.ResponseWriter, r *http.Request) 
 		}
 
 		proxy := r.Context().Value(CtxKeyProxy).(adapter.Outbound)
+		if url == "" {
+			url = urltest.OutboundTestURL(proxy)
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), time.Millisecond*time.Duration(timeout))
 		defer cancel()
 		var updates *adapter.GroupUpdates
@@ -242,19 +267,18 @@ func getProxyDelay(server *Server) func(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 
-		delay, err := urltest.URLTest(server.probeContext(ctx), url, proxy)
-		if err == nil && delay == 0 {
-			delay = 1
-		}
+		measurement := probeWithDeadline(server.probeContext(ctx), url, proxy)
+		delay, err := measurement.Delay, measurement.Err
 		defer func() {
-			realTag := group.RealTag(proxy, N.NetworkTCP)
-			store := func() {
-				if err != nil {
-					server.urlTestHistory.DeleteURLTestHistory(realTag)
-				} else {
-					server.urlTestHistory.StoreURLTestHistory(realTag, &adapter.URLTestHistory{Time: time.Now(), Delay: delay})
-				}
+			if ctx.Err() == context.Canceled {
+				return
 			}
+			realTag := measurement.Outbound
+			if realTag == "" {
+				realTag = measurement.Via
+			}
+			store := func() { measurement.Store(server.urlTestHistory) }
+
 			if updates != nil {
 				if !updates.Commit(revision, store) {
 					return
@@ -289,6 +313,8 @@ func getProxyDelay(server *Server) func(w http.ResponseWriter, r *http.Request) 
 
 		render.JSON(w, r, render.M{
 			"delay": delay,
+			"url":   measurement.URL,
+			"node":  adapter.OutboundDisplayName(server.ctx, measurement.Outbound),
 		})
 	}
 }

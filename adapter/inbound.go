@@ -59,6 +59,7 @@ type InboundContext struct {
 	RouteRule     string
 	RouteOutbound string
 	OutboundChain []Outbound
+	OutboundTrace *OutboundTrace
 
 	// sniffer
 
@@ -188,6 +189,14 @@ type inboundContextKey struct{}
 type dnsTransportTagKey struct{}
 
 func ContextWithDNSTransportTag(ctx context.Context, transportTag string) context.Context {
+	if transportTag != "" {
+		// Resolver traffic can use a different detour from the connection
+		// whose server name it resolves. Do not publish that auxiliary route
+		// into the application's actual outbound chain.
+		ctx, metadata := ExtendContext(ctx)
+		metadata.OutboundTrace = nil
+		return context.WithValue(ctx, (*dnsTransportTagKey)(nil), transportTag)
+	}
 	return context.WithValue(ctx, (*dnsTransportTagKey)(nil), transportTag)
 }
 
@@ -198,6 +207,7 @@ func DNSTransportTagFromContext(ctx context.Context) (string, bool) {
 
 func ContextForMultiplexSession(ctx context.Context) context.Context {
 	var sessionContext InboundContext
+	sessionContext.OutboundTrace = NewOutboundTrace(nil)
 	metadata := ContextFrom(ctx)
 	if metadata != nil {
 		sessionContext.Outbound = metadata.Outbound

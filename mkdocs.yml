@@ -206,6 +206,7 @@ nav:
           - DNS: configuration/outbound/dns.md
           - Selector: configuration/outbound/selector.md
           - URLTest: configuration/outbound/urltest.md
+          - Smart URLTest: configuration/outbound/smart-urltest.md
           - Subscription: configuration/outbound/subscription.md
       - Service:
           - configuration/service/index.md

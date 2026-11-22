@@ -164,10 +164,7 @@ func getConnections(ctx context.Context, trafficManager *trafficcontrol.Manager)
 func closeConnection(trafficManager *trafficcontrol.Manager) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := uuid.FromStringOrNil(chi.URLParam(r, "id"))
-		targetConnection := trafficManager.Connection(id)
-		if targetConnection != nil {
-			targetConnection.Close()
-		}
+		trafficManager.CloseConnection(id)
 		render.NoContent(w, r)
 	}
 }

@@ -103,6 +103,7 @@ func startNamedSubscriptionBox(t *testing.T, config string) (*box.Box, *Server, 
 	subscription.RegisterOutbound(outbounds)
 	group.RegisterSelector(outbounds)
 	group.RegisterURLTest(outbounds)
+	group.RegisterSmartURLTest(outbounds)
 	direct.RegisterOutbound(outbounds)
 	httpproxy.RegisterOutbound(outbounds)
 	transports := dns.NewTransportRegistry()

@@ -49,6 +49,7 @@ const (
 	TypeSelector     = "selector"
 	TypeSubscription = "subscription"
 	TypeURLTest      = "urltest"
+	TypeSmartURLTest = "smart-urltest"
 )
 
 func ProxyDisplayName(proxyType string) string {
@@ -117,7 +118,7 @@ func ProxyDisplayName(proxyType string) string {
 		return "Selector"
 	case TypeSubscription:
 		return "Selector"
-	case TypeURLTest:
+	case TypeURLTest, TypeSmartURLTest:
 		return "URLTest"
 	default:
 		return "Unknown"

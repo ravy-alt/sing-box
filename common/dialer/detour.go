@@ -82,6 +82,9 @@ func (d *DetourDialer) DialContext(ctx context.Context, network string, destinat
 	if err != nil {
 		return nil, err
 	}
+	if outbound, ok := dialer.(adapter.Outbound); ok {
+		adapter.TraceOutbound(ctx, outbound)
+	}
 	return dialer.DialContext(ctx, network, destination)
 }
 
@@ -89,6 +92,9 @@ func (d *DetourDialer) ListenPacket(ctx context.Context, destination M.Socksaddr
 	dialer, err := d.Dialer()
 	if err != nil {
 		return nil, err
+	}
+	if outbound, ok := dialer.(adapter.Outbound); ok {
+		adapter.TraceOutbound(ctx, outbound)
 	}
 	return dialer.ListenPacket(ctx, destination)
 }

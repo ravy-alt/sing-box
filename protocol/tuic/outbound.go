@@ -75,10 +75,12 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 		return nil, err
 	}
 	client, err := tuic.NewClient(tuic.ClientOptions{
-		Context:       ctx,
-		Dialer:        outboundDialer,
-		ServerAddress: options.ServerOptions.Build(),
-		TLSConfig:     tlsConfig,
+		NewSession:      adapter.NewTracedSession,
+		SessionSelected: adapter.TraceSessionSelection,
+		Context:         ctx,
+		Dialer:          outboundDialer,
+		ServerAddress:   options.ServerOptions.Build(),
+		TLSConfig:       tlsConfig,
 		QUICOptions: qtls.QUICOptions{
 			IdleTimeout:             options.IdleTimeout.Build(),
 			KeepAlivePeriod:         options.KeepAlivePeriod.Build(),

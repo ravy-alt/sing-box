@@ -418,6 +418,24 @@ func parseDocument(ctx context.Context, provider string, content []byte, members
 			}
 			continue
 		}
+		if group, ok := outbound.Options.(*option.SmartURLTestOutboundOptions); ok {
+			if group.EmptyFallback != "" {
+				group.EmptyFallback, err = rewrite("outbound:"+outbound.Tag)("outbound", group.EmptyFallback)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if err := rewriteImports(outbound.Tag, group.Import); err != nil {
+				return nil, err
+			}
+			for j, tag := range group.Outbounds {
+				group.Outbounds[j], err = rewrite("outbound:"+outbound.Tag)("outbound", tag)
+				if err != nil {
+					return nil, err
+				}
+			}
+			continue
+		}
 		if nested, ok := outbound.Options.(*option.SubscriptionOutboundOptions); ok {
 			if nested.EmptyFallback != "" {
 				nested.EmptyFallback, err = rewrite("outbound:"+outbound.Tag)("outbound", nested.EmptyFallback)

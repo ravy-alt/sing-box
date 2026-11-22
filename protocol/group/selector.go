@@ -253,6 +253,7 @@ func (s *Selector) DialContext(ctx context.Context, network string, destination 
 	if selected == nil {
 		return nil, E.New("selector has no available outbound: ", s.Tag())
 	}
+	adapter.TraceOutbound(ctx, selected)
 	conn, err := selected.DialContext(ctx, network, destination)
 	if err != nil {
 		return nil, err
@@ -265,6 +266,7 @@ func (s *Selector) ListenPacket(ctx context.Context, destination M.Socksaddr) (n
 	if selected == nil {
 		return nil, E.New("selector has no available outbound: ", s.Tag())
 	}
+	adapter.TraceOutbound(ctx, selected)
 	conn, err := selected.ListenPacket(ctx, destination)
 	if err != nil {
 		return nil, err
@@ -274,6 +276,11 @@ func (s *Selector) ListenPacket(ctx context.Context, destination M.Socksaddr) (n
 
 func RealTag(detour adapter.Outbound, network string) string {
 	for {
+		// A per-destination group can successfully use a fallback instead of
+		// Selected(). Attribute a probe of that group to the group itself.
+		if _, dynamic := detour.(adapter.DynamicOutboundGroup); dynamic {
+			return detour.Tag()
+		}
 		group, isGroup := detour.(adapter.OutboundGroup)
 		if !isGroup {
 			return detour.Tag()

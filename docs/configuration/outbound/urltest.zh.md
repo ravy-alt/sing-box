@@ -40,6 +40,8 @@
 
 用于测试的链接。默认使用 `https://www.gstatic.com/generate_204`。
 
+测速递归固定每个成员当前选中的最终节点，并使用本组 URL；嵌套组自己的 URL 不替代本组 URL。结果只按最终节点和 URL 存储，后续查询会跟随选择变化。面板使用其他 URL 或 IPv6 测速不会覆盖本 URL 的记录。详见 [测速存储及 API 语义](smart-urltest.zh.md)。
+
 #### interval
 
 测试间隔。 默认使用 `3m`。

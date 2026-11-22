@@ -8,7 +8,10 @@ SB_LDFLAGS="$(cat release/LDFLAGS)"
 
 go test -race -count=1 -timeout=10m -tags "$SB_TAGS" -ldflags "$SB_LDFLAGS" \
   ./adapter ./adapter/outbound ./common/dependency ./common/group \
-  ./common/httpclient ./common/urltest ./protocol/anytls \
+  ./common/httpclient ./common/urltest ./common/trafficcontrol ./common/mux \
+  ./protocol/group ./protocol/anytls ./protocol/snell ./protocol/ssh \
+  ./protocol/hysteria ./protocol/hysteria2 ./protocol/tuic \
+  ./transport/v2rayhttp ./transport/v2raygrpc ./transport/v2raygrpclite ./transport/v2rayquic \
   ./protocol/shadowsocks ./protocol/subscription \
   ./experimental/clashapi ./daemon ./dns ./dns/transport ./option ./route
 

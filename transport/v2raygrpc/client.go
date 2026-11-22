@@ -17,35 +17,40 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/peer"
 )
 
 var _ adapter.V2RayClientTransport = (*Client)(nil)
 
 type Client struct {
-	ctx         context.Context
-	dialer      N.Dialer
-	serverAddr  string
-	serviceName string
-	dialOptions []grpc.DialOption
-	conn        atomic.Pointer[grpc.ClientConn]
-	connAccess  sync.Mutex
+	ctx           context.Context
+	dialer        N.Dialer
+	serverAddr    string
+	serviceName   string
+	dialOptions   []grpc.DialOption
+	conn          atomic.Pointer[grpc.ClientConn]
+	connAccess    sync.Mutex
+	businessDials atomic.Int32
 }
 
 func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, options option.V2RayGRPCOptions, tlsConfig tls.Config) (adapter.V2RayClientTransport, error) {
 	var dialOptions []grpc.DialOption
+	var transportCredentials credentials.TransportCredentials
 	if tlsConfig != nil {
 		if len(tlsConfig.NextProtos()) == 0 {
 			tlsConfig.SetNextProtos([]string{http2.NextProtoTLS})
 		}
-		dialOptions = append(dialOptions, grpc.WithTransportCredentials(NewTLSTransportCredentials(tlsConfig)))
+		transportCredentials = NewTLSTransportCredentials(tlsConfig)
 		if tlsConfig.ServerName() != "" {
 			dialOptions = append(dialOptions, grpc.WithAuthority(tlsConfig.ServerName()))
 		}
 	} else {
-		dialOptions = append(dialOptions, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		transportCredentials = insecure.NewCredentials()
 	}
+	dialOptions = append(dialOptions, grpc.WithTransportCredentials(&tracedCredentials{transportCredentials}))
 	if options.IdleTimeout > 0 {
 		dialOptions = append(dialOptions, grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                time.Duration(options.IdleTimeout),
@@ -62,18 +67,29 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 		},
 		MinConnectTimeout: 5 * time.Second,
 	}))
-	dialOptions = append(dialOptions, grpc.WithContextDialer(func(ctx context.Context, server string) (net.Conn, error) {
-		return dialer.DialContext(ctx, N.NetworkTCP, M.ParseSocksaddr(server))
-	}))
 	//nolint:staticcheck
 	dialOptions = append(dialOptions, grpc.WithReturnConnectionError())
-	return &Client{
+	client := &Client{
 		ctx:         ctx,
 		dialer:      dialer,
 		serverAddr:  serverAddr.String(),
 		serviceName: options.ServiceName,
 		dialOptions: dialOptions,
-	}, nil
+	}
+	client.dialOptions = append(client.dialOptions, grpc.WithContextDialer(func(ctx context.Context, server string) (net.Conn, error) {
+		ctx = adapter.ContextForMultiplexSession(ctx)
+		// gRPC owns reconnects and discards RPC context values. Background and
+		// probe-only connection attempts must not cause business failure loops.
+		if client.businessDials.Load() == 0 {
+			ctx = adapter.ContextWithURLTest(ctx)
+		}
+		conn, err := dialer.DialContext(ctx, N.NetworkTCP, M.ParseSocksaddr(server))
+		if err != nil {
+			return nil, err
+		}
+		return adapter.WithTransportTrace(conn, adapter.ContextFrom(ctx).OutboundTrace), nil
+	}))
+	return client, nil
 }
 
 func (c *Client) connect() (*grpc.ClientConn, error) {
@@ -97,6 +113,10 @@ func (c *Client) connect() (*grpc.ClientConn, error) {
 }
 
 func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
+	if !adapter.IsURLTest(ctx) {
+		c.businessDials.Add(1)
+		defer c.businessDials.Add(-1)
+	}
 	clientConn, err := c.connect()
 	if err != nil {
 		return nil, err
@@ -114,6 +134,11 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 	}
 	if !stopPropagation() {
 		return nil, context.Cause(ctx)
+	}
+	if remote, ok := peer.FromContext(stream.Context()); ok {
+		if info, ok := remote.AuthInfo.(*tracedAuthInfo); ok {
+			adapter.TraceSessionSelection(ctx, info.trace)
+		}
 	}
 	return NewGRPCConn(stream, cancel), nil
 }

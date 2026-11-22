@@ -3,20 +3,23 @@ package clashapi
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/urltest"
-	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
 )
 
-// Dashboard probes are independent of a group's automatic health check. In
-// particular, an IPv6 probe must not join a check of the configured IPv4 URL.
-// Like the Clash API, test each immediate member through its actual dialer;
-// a nested group is tested through its selected path, not recursively expanded.
+// Nested groups are pinned recursively and aliases of the same leaf share a
+// single measurement. Only final nodes own measurements, never group aliases.
 func (s *Server) testGroup(ctx context.Context, outboundGroup adapter.OutboundGroup, link string) (map[string]uint16, error) {
 	ctx = s.probeContext(ctx)
+	if link == "" {
+		link = urltest.OutboundTestURL(outboundGroup)
+	}
+	if smart, ok := outboundGroup.(adapter.SmartURLTestGroup); ok && (link == "" || urltest.NormalizeURL(link) == urltest.NormalizeURL(smart.TestURL())) {
+		return smart.URLTest(ctx)
+	}
+	link = urltest.NormalizeURL(link)
 	var updates *adapter.GroupUpdates
 	var revision uint64
 	if s.ctx != nil {
@@ -25,83 +28,49 @@ func (s *Server) testGroup(ctx context.Context, outboundGroup adapter.OutboundGr
 			revision, _ = updates.State()
 		}
 	}
-	type measurement struct {
-		tag, realTag string
-		delay        uint16
-		err          error
+	type job struct {
+		outbound adapter.Outbound
+		aliases  []string
+		result   urltest.Result
 	}
-	members := outboundGroup.All()
-	completed := make(chan measurement, len(members))
-	pending := 0
-	seen := make(map[string]bool)
-	history := make(map[string]*adapter.URLTestHistory)
-	for _, tag := range members {
-		if seen[tag] {
-			continue
-		}
-		seen[tag] = true
+	jobs := make(map[string]*job)
+	for _, tag := range outboundGroup.All() {
 		member, loaded := s.outbound.Outbound(tag)
 		if !loaded {
 			continue
 		}
-		// Freeze native groups' selected dialer along with its history key.
-		// Merely reading RealTag and then dialing the group can measure a different
-		// member if selection changes between those two operations. Provided
-		// handles remain intact so their generation leases are still respected.
-		for {
-			nested, isGroup := member.(adapter.OutboundGroup)
-			if !isGroup {
-				break
-			}
-			selected := nested.Selected(N.NetworkTCP)
-			if selected == nil {
-				break
-			}
-			member = selected
+		resolved, err := urltest.Resolve(member)
+		if err != nil {
+			continue
 		}
-		realTag := member.Tag()
-		history[realTag] = nil
-		pending++
-		go func() {
-			delay, err := urltest.URLTest(ctx, link, member)
-			completed <- measurement{tag, realTag, delay, err}
-		}()
+		key := resolved.Tag()
+		if existing := jobs[key]; existing != nil {
+			existing.aliases = append(existing.aliases, tag)
+			continue
+		}
+		jobs[key] = &job{outbound: resolved, aliases: []string{tag}, result: urltest.Result{}}
 	}
-	result := make(map[string]uint16)
-	collect := func(m measurement) {
-		if m.err == nil {
-			result[m.tag] = m.delay
-			history[m.realTag] = &adapter.URLTestHistory{Time: time.Now(), Delay: m.delay}
-		} else if history[m.realTag] == nil {
-			history[m.realTag] = nil
-		}
+	type measurement struct {
+		key    string
+		result urltest.Result
 	}
-wait:
-	for pending > 0 {
-		select {
-		case m := <-completed:
-			pending--
-			collect(m)
-		case <-ctx.Done():
-			// Keep successful results even when another member times out. Also
-			// drain measurements already delivered at the deadline.
-			for {
-				select {
-				case m := <-completed:
-					collect(m)
-				default:
-					break wait
-				}
-			}
-		}
+	completed := make(chan measurement, len(jobs))
+	for key, work := range jobs {
+		go func() { completed <- measurement{key, probeWithDeadline(ctx, link, work.outbound)} }()
+	}
+	// Each worker has a bounded wait, including admission to the probe pool.
+	// Collect its actual outcome so queued jobs are not mistaken for timed-out
+	// network attempts when the request deadline expires.
+	for range jobs {
+		m := <-completed
+		jobs[m.key].result = m.result
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return nil, ctx.Err()
 	}
 	commit := func() {
-		for tag, value := range history {
-			if value == nil {
-				s.urlTestHistory.DeleteURLTestHistory(tag)
-			} else {
-				s.urlTestHistory.StoreURLTestHistory(tag, value)
-			}
+		for _, work := range jobs {
+			work.result.Store(s.urlTestHistory)
 		}
 	}
 	if updates != nil {
@@ -110,6 +79,19 @@ wait:
 		}
 	} else {
 		commit()
+	}
+	result := make(map[string]uint16)
+	for _, work := range jobs {
+		if work.result.Err != nil {
+			continue
+		}
+		// Read the committed observation so concurrent probes cannot make
+		// aliases disagree with that leaf's latest URL result.
+		if history := s.urlTestHistory.LoadURLTestHistory(work.result.Outbound, link); history != nil {
+			for _, tag := range work.aliases {
+				result[tag] = history.Delay
+			}
+		}
 	}
 	if urlTestGroup, ok := outboundGroup.(adapter.URLTestGroup); ok {
 		urlTestGroup.PerformUpdateCheck()

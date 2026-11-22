@@ -40,6 +40,8 @@ Optional fallback for an empty group. Inserted only when the combined static and
 
 The URL to test. `https://www.gstatic.com/generate_204` will be used if empty.
 
+Tests recursively pin each member's current final node and use this group's URL, including for nested groups with different URLs. Histories are stored only by final node and URL; selection changes are reflected on subsequent reads. Different dashboard and IPv6 URLs do not overwrite this URL's result. See [measurement storage and API semantics](smart-urltest.md).
+
 #### interval
 
 The test interval. `3m` will be used if empty.

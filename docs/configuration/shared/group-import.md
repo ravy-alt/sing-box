@@ -1,6 +1,6 @@
 # Group imports
 
-`selector`, `urltest`, and `subscription` support `import`. Each entry reads the current members of another group, filters them, and appends them to the destination group. The source may be any of these group types, including an internal group exposed by a subscription.
+`selector`, `urltest`, `smart-urltest`, and `subscription` support `import`. Each entry reads the current members of another group, filters them, and appends them to the destination group. The source may be any of these group types, including an internal group exposed by a subscription.
 
 ```json
 {
@@ -40,7 +40,7 @@ An import copies the source's immediate effective member list, including members
 
 ## empty_fallback
 
-`selector`, `urltest`, and `subscription` accept `empty_fallback`, an outbound, endpoint, or group tag declared in the same configuration document. It is a group-level field alongside `import`, not a filter property, and cannot directly reference another subscription's internal member.
+`selector`, `urltest`, `smart-urltest`, and `subscription` accept `empty_fallback`, an outbound, endpoint, or group tag declared in the same configuration document. It is a group-level field alongside `import`, not a filter property, and cannot directly reference another subscription's internal member.
 
 Static members (a subscription's downloaded members) and all filtered imports are combined first. The fallback is inserted only if that result is empty, and removed immediately when regular members return. A selector or URL test group with only `empty_fallback` is valid. The effective fallback appears in `All()`, APIs, and multilevel imports; consumers still apply their own filters to it.
 

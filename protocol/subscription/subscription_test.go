@@ -66,6 +66,7 @@ func testContext() context.Context {
 	RegisterOutbound(outbounds)
 	group.RegisterSelector(outbounds)
 	group.RegisterURLTest(outbounds)
+	group.RegisterSmartURLTest(outbounds)
 	direct.RegisterOutbound(outbounds)
 	httpproxy.RegisterOutbound(outbounds)
 	outbound.Register[testOptions](outbounds, "test", func(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options testOptions) (adapter.Outbound, error) {

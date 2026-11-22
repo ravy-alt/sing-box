@@ -33,6 +33,9 @@ func ValidateGroupOutbounds(options Options) error {
 		case *URLTestOutboundOptions:
 			members = group.Outbounds
 			fallback = group.EmptyFallback
+		case *SmartURLTestOutboundOptions:
+			members = group.Outbounds
+			fallback = group.EmptyFallback
 		case *SubscriptionOutboundOptions:
 			// Subscription.Outbounds selects from its downloaded document;
 			// parseDocument validates that whitelist against that document.

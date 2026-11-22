@@ -158,6 +158,7 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
 	}
 	metadata.RouteOutbound = selectedOutbound.Tag()
 	metadata.OutboundChain = chain
+	metadata.OutboundTrace = adapter.NewOutboundTrace(chain)
 	for _, tracker := range r.trackers {
 		conn = tracker.RoutedConnection(ctx, conn, metadata, selectedRule, selectedOutbound)
 	}
@@ -176,7 +177,7 @@ func resolveOutbound(outbound adapter.Outbound, network string) ([]adapter.Outbo
 	chain := []adapter.Outbound{outbound}
 	for {
 		group, isGroup := outbound.(adapter.OutboundGroup)
-		if !isGroup {
+		if _, dynamic := outbound.(adapter.DynamicOutboundGroup); !isGroup || dynamic {
 			break
 		}
 		outbound = group.Selected(network)
@@ -317,6 +318,7 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 	}
 	metadata.RouteOutbound = selectedOutbound.Tag()
 	metadata.OutboundChain = chain
+	metadata.OutboundTrace = adapter.NewOutboundTrace(chain)
 	for _, tracker := range r.trackers {
 		conn = tracker.RoutedPacketConnection(ctx, conn, metadata, selectedRule, selectedOutbound)
 	}
@@ -529,6 +531,7 @@ func (r *Router) preMatchFlow(ctx context.Context, metadata *adapter.InboundCont
 		result.Destination = metadata.Destination.AddrPort()
 	}
 	metadata.OutboundChain = chain
+	metadata.OutboundTrace = adapter.NewOutboundTrace(chain)
 	metadataCopy := *metadata
 	result.NewTracker = func() tun.FlowTracker {
 		r.logger.InfoContext(ctx, "pre-match: forward ", metadataCopy.Network, " connection from ", metadataCopy.Source.AddrString(), " to ", metadataCopy.Destination.AddrString(), " via outbound/", outbound.Type(), "[", outbound.Tag(), "]")

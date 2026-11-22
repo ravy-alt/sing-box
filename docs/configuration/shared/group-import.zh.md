@@ -1,6 +1,6 @@
 # 组导入
 
-`selector`、`urltest` 和 `subscription` 均支持 `import`。每条配置读取另一个组的当前成员，筛选后追加到当前组。来源可以是这三类组，也可以是订阅暴露的内部组。
+`selector`、`urltest`、`smart-urltest` 和 `subscription` 均支持 `import`。每条配置读取另一个组的当前成员，筛选后追加到当前组。来源可以是这三类组，也可以是订阅暴露的内部组。
 
 ```json
 {
@@ -40,7 +40,7 @@ selector 和 urltest 的 `outbounds`、`import`、`empty_fallback` 至少一个�
 
 ## empty_fallback
 
-`selector`、`urltest` 和 `subscription` 均支持 `empty_fallback`，其值是同一配置文档中声明的出站、端点或组的标签。它与 `import` 同级，不是单条过滤规则的属性，不能直接引用其他订阅内部成员。
+`selector`、`urltest`、`smart-urltest` 和 `subscription` 均支持 `empty_fallback`，其值是同一配置文档中声明的出站、端点或组的标签。它与 `import` 同级，不是单条过滤规则的属性，不能直接引用其他订阅内部成员。
 
 先合并静态成员（订阅自身下载文档的成员）和全部过滤后的导入成员，只有合并结果为空时才插入备用节点。成员恢复后立即移除备用节点，并按组的选择规则重新选择。仅有 `empty_fallback` 的 selector/urltest 也有效。备用成员通过 `All()`、API 和多级 `import` 可见，上游导入仍对它执行自己的过滤条件。
 

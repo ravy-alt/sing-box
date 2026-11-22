@@ -9,6 +9,7 @@ import (
 	"github.com/sagernet/sing/common/cleanup"
 	"github.com/sagernet/sing/common/observable"
 	"github.com/sagernet/sing/common/x/list"
+	"github.com/sagernet/sing/service"
 
 	"github.com/gofrs/uuid/v5"
 )
@@ -35,6 +36,7 @@ var (
 )
 
 type Manager struct {
+	outboundCaches          *adapter.OutboundCacheRegistry
 	connections             compatible.Map[uuid.UUID, Tracker]
 	closedConnectionsAccess sync.Mutex
 	closedConnections       list.List[TrackerMetadata]
@@ -57,6 +59,7 @@ func (m *Manager) Name() string {
 
 func (m *Manager) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 	if stage == adapter.StartStateInitialize {
+		m.outboundCaches = service.PtrFromContext[adapter.OutboundCacheRegistry](scope.Context())
 		m.eventObserver = observable.NewObserver(m.eventSubscriber, 64)
 		scope.Add(m.eventObserver.Close)
 		cleaner := cleanup.Add(m.Clear)
@@ -166,10 +169,21 @@ func (m *Manager) Connection(id uuid.UUID) Tracker {
 }
 
 func (m *Manager) CloseAllConnections() {
+	m.outboundCaches.Clear()
 	m.connections.Range(func(_ uuid.UUID, tracker Tracker) bool {
+		tracker.Metadata().Metadata.OutboundTrace.InvalidateCaches()
 		tracker.Close()
 		return true
 	})
+}
+
+// Only administrative closes invalidate affinity. Ordinary connection teardown
+// leaves a successful binding available until its fixed TTL expires.
+func (m *Manager) CloseConnection(id uuid.UUID) {
+	if tracker := m.Connection(id); tracker != nil {
+		tracker.Metadata().Metadata.OutboundTrace.InvalidateCaches()
+		tracker.Close()
+	}
 }
 
 func (m *Manager) Clear() {

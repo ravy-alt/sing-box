@@ -433,6 +433,7 @@ func (s *Subscription) acquire(ctx context.Context, tag, network string, destina
 		g.release()
 		return nil, nil, ctx, E.New("subscription member unavailable for ", network, ": ", tag)
 	}
+	adapter.TraceOutbound(ctx, outbound)
 	ctx = context.WithValue(ctx, dialPathKey{}, path)
 	return g, outbound, ctx, nil
 }

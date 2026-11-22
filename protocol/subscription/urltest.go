@@ -13,6 +13,8 @@ import (
 	N "github.com/sagernet/sing/common/network"
 )
 
+func (s *Subscription) TestURL() string { return s.options.TestURL }
+
 func (s *Subscription) PerformUpdateCheck() {
 	if s.options.Mode != C.TypeURLTest || s.history == nil {
 		return
@@ -31,7 +33,7 @@ func (s *Subscription) PerformUpdateCheck() {
 	for _, tag := range members.Tags {
 		member, _ := g.outbounds.Outbound(tag)
 		networks[tag] = outboundNetworks(member, make(map[string]bool))
-		if h := s.history.LoadURLTestHistory(tag); h != nil && h.Delay > 0 {
+		if h := s.history.LoadOutboundHistory(member, s.options.TestURL); h != nil && h.Delay > 0 {
 			result[tag] = h.Delay
 		}
 	}
@@ -94,22 +96,34 @@ func (s *Subscription) URLTest(ctx context.Context) (map[string]uint16, error) {
 		}
 	}()
 	result := make(map[string]uint16)
+	measurements := make(map[string]urltest.Result)
 	networks := make(map[string][]string, len(members.Tags))
-	outbounds := make(map[string]adapter.Outbound, len(members.Tags))
+	type job struct {
+		outbound adapter.Outbound
+		aliases  []string
+	}
+	jobs := make(map[string]*job)
 	for _, tag := range members.Tags {
 		outbound, _ := g.outbounds.Outbound(tag)
-		outbounds[tag] = outbound
 		networks[tag] = outboundNetworks(outbound, make(map[string]bool))
+		if !slices.Contains(networks[tag], N.NetworkTCP) {
+			continue
+		}
+		leaf, err := urltest.Resolve(outbound)
+		if err != nil {
+			continue
+		}
+		if work := jobs[leaf.Tag()]; work != nil {
+			work.aliases = append(work.aliases, tag)
+		} else {
+			jobs[leaf.Tag()] = &job{leaf, []string{tag}}
+		}
 	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, 10)
 loop:
-	for _, tag := range members.Tags {
-		outbound := outbounds[tag]
-		if !slices.Contains(networks[tag], N.NetworkTCP) {
-			continue
-		}
+	for key, work := range jobs {
 		select {
 		case semaphore <- struct{}{}:
 		case <-ctx.Done():
@@ -119,12 +133,17 @@ loop:
 		go func() {
 			defer wg.Done()
 			defer func() { <-semaphore }()
-			delay, err := urltest.URLTest(ctx, s.options.TestURL, outbound)
-			if err == nil {
-				mu.Lock()
-				result[tag] = delay
-				mu.Unlock()
+			probeCtx, cancelProbe := context.WithTimeout(ctx, C.TCPTimeout)
+			defer cancelProbe()
+			observation := urltest.URLTestWithResult(probeCtx, s.options.TestURL, work.outbound)
+			mu.Lock()
+			measurements[key] = observation
+			if observation.Err == nil {
+				for _, tag := range work.aliases {
+					result[tag] = observation.Delay
+				}
 			}
+			mu.Unlock()
 		}()
 	}
 	wg.Wait()
@@ -134,19 +153,15 @@ loop:
 	s.mu.Lock()
 	if s.current == g && !s.closed {
 		s.members.Updates().Commit(members.Revision, func() {
-			if s.history != nil {
-				for _, tag := range members.Tags {
-					if delay, ok := result[tag]; ok {
-						s.history.StoreURLTestHistory(tag, &adapter.URLTestHistory{Time: time.Now(), Delay: delay})
-					} else {
-						s.history.DeleteURLTestHistory(tag)
-					}
-				}
+			for _, observation := range measurements {
+				observation.Store(s.history)
 			}
-			s.selectMeasured(members.Tags, networks, result)
 		})
 	}
 	s.mu.Unlock()
+	// A nested selector may have switched while probes were running. Derive
+	// selection from the current leaves, not the aliases captured at test start.
+	s.PerformUpdateCheck()
 	s.notify()
 	return result, nil
 }

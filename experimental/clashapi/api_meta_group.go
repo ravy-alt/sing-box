@@ -21,8 +21,23 @@ func groupRouter(server *Server) http.Handler {
 		r.Use(parseProxyName, findProxyByName(server))
 		r.Get("/", getGroup(server))
 		r.Get("/delay", getGroupDelay(server))
+		r.Delete("/cache", clearGroupCache())
 	})
 	return r
+}
+
+func clearGroupCache() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		proxy := r.Context().Value(CtxKeyProxy).(adapter.Outbound)
+		group, _ := adapter.OutboundGroupFor(proxy)
+		if smart, ok := group.(adapter.SmartURLTestGroup); ok {
+			smart.ClearCache()
+			render.NoContent(w, r)
+			return
+		}
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, newError("outbound is not a smart-urltest group"))
+	}
 }
 
 func getGroups(server *Server) func(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +46,7 @@ func getGroups(server *Server) func(w http.ResponseWriter, r *http.Request) {
 			_, isGroup := adapter.OutboundGroupFor(it)
 			return isGroup && !adapter.IsSubscriptionSource(it)
 		}), func(it adapter.Outbound) *badjson.JSONObject {
-			return proxyInfo(server, it)
+			return proxyInfo(server, it, r.URL.Query().Get("url"))
 		})
 		render.JSON(w, r, render.M{
 			"proxies": groups,
@@ -43,7 +58,7 @@ func getGroup(server *Server) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		proxy := r.Context().Value(CtxKeyProxy).(adapter.Outbound)
 		if _, ok := adapter.OutboundGroupFor(proxy); ok {
-			render.JSON(w, r, proxyInfo(server, proxy))
+			render.JSON(w, r, proxyInfo(server, proxy, r.URL.Query().Get("url")))
 			return
 		}
 		render.Status(r, http.StatusNotFound)

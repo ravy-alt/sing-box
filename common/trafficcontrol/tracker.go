@@ -90,7 +90,7 @@ type connTracker struct {
 }
 
 func (t *connTracker) Metadata() *TrackerMetadata {
-	return &t.metadata
+	return t.metadata.snapshot()
 }
 
 func (t *connTracker) Close() error {
@@ -122,7 +122,7 @@ type flowTracker struct {
 }
 
 func (t *flowTracker) Metadata() *TrackerMetadata {
-	return &t.metadata
+	return t.metadata.snapshot()
 }
 
 func (t *flowTracker) AttachFlow(handle tun.FlowHandle) {
@@ -162,7 +162,7 @@ type packetConnTracker struct {
 }
 
 func (t *packetConnTracker) Metadata() *TrackerMetadata {
-	return &t.metadata
+	return t.metadata.snapshot()
 }
 
 func (t *packetConnTracker) Close() error {
@@ -180,4 +180,17 @@ func (t *packetConnTracker) ReaderReplaceable() bool {
 
 func (t *packetConnTracker) WriterReplaceable() bool {
 	return true
+}
+
+func (m TrackerMetadata) snapshot() *TrackerMetadata {
+	if chain := m.Metadata.OutboundTrace.Chain(); len(chain) > 0 {
+		m.Metadata.OutboundChain = chain
+		m.Chain = common.Map(chain, adapter.Outbound.Tag)
+		slices.Reverse(m.Chain)
+		last := chain[len(chain)-1]
+		m.Outbound, m.OutboundType = last.Tag(), last.Type()
+	} else {
+		m.Chain = slices.Clone(m.Chain)
+	}
+	return &m
 }

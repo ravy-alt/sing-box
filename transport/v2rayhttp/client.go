@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"strings"
@@ -57,7 +58,12 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 			ReadIdleTimeout: time.Duration(options.IdleTimeout),
 			PingTimeout:     time.Duration(options.PingTimeout),
 			DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.STDConfig) (net.Conn, error) {
-				return tlsDialer.DialTLSContext(adapter.ContextForMultiplexSession(ctx), M.ParseSocksaddr(addr))
+				ctx = adapter.ContextForMultiplexSession(ctx)
+				conn, err := tlsDialer.DialTLSContext(ctx, M.ParseSocksaddr(addr))
+				if err != nil {
+					return nil, err
+				}
+				return adapter.WithTransportTrace(conn, adapter.ContextFrom(ctx).OutboundTrace), nil
 			},
 		}
 	}
@@ -137,7 +143,7 @@ func (c *Client) dialHTTP2(ctx context.Context) (net.Conn, error) {
 		URL:    &c.requestURL,
 		Header: c.headers.Clone(),
 	}
-	request = request.WithContext(requestCtx)
+	request = request.WithContext(httptrace.WithClientTrace(requestCtx, &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) { adapter.TraceTransportConn(ctx, info.Conn, c) }}))
 	switch hostLen := len(c.host); hostLen {
 	case 0:
 		// https://github.com/v2fly/v2ray-core/blob/master/transport/internet/http/config.go#L13

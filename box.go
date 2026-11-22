@@ -125,6 +125,7 @@ func New(options Options) (*Box, error) {
 	ctx = service.ContextWithDefaultRegistry(ctx)
 	service.MustRegisterPtr(ctx, &adapter.SubscriptionHostOptions{Options: options.Options})
 	service.MustRegisterPtr(ctx, adapter.NewGroupUpdates())
+	service.MustRegisterPtr(ctx, new(adapter.OutboundCacheRegistry))
 	var staticOutboundTags []string
 	for i, outbound := range options.Outbounds {
 		tag := outbound.Tag

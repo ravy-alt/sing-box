@@ -35,6 +35,7 @@ type Client struct {
 }
 
 type clientConnection struct {
+	metadata any
 	*quic.Conn
 	access    sync.Mutex
 	streams   int
@@ -93,7 +94,7 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 	}, nil
 }
 
-func (c *Client) offer() (*clientConnection, error) {
+func (c *Client) offer(request context.Context) (*clientConnection, error) {
 	conn := c.conn.Load()
 	if conn != nil && conn.active() {
 		return conn, nil
@@ -104,19 +105,20 @@ func (c *Client) offer() (*clientConnection, error) {
 	if conn != nil && conn.active() {
 		return conn, nil
 	}
-	conn, err := c.offerNew()
+	conn, err := c.offerNew(request)
 	if err != nil {
 		return nil, err
 	}
 	return conn, nil
 }
 
-func (c *Client) offerNew() (*clientConnection, error) {
-	udpConn, err := c.dialer.DialContext(c.ctx, "udp", c.serverAddr)
+func (c *Client) offerNew(request context.Context) (*clientConnection, error) {
+	sessionCtx, metadata := adapter.NewTracedSession(c.ctx, request)
+	udpConn, err := c.dialer.DialContext(sessionCtx, "udp", c.serverAddr)
 	if err != nil {
 		return nil, err
 	}
-	quicConn, err := qtls.Dial(c.ctx, udpConn, c.tlsConfig, c.quicConfig)
+	quicConn, err := qtls.Dial(sessionCtx, udpConn, c.tlsConfig, c.quicConfig)
 	if err != nil {
 		udpConn.Close()
 		return nil, err
@@ -127,7 +129,7 @@ func (c *Client) offerNew() (*clientConnection, error) {
 		<-quicConn.Context().Done()
 		udpConn.Close()
 	}()
-	conn := &clientConnection{Conn: quicConn, closeIdle: &c.closeIdle}
+	conn := &clientConnection{Conn: quicConn, closeIdle: &c.closeIdle, metadata: metadata}
 	c.conn.Store(conn)
 	c.rawConn = udpConn
 	return conn, nil
@@ -135,7 +137,7 @@ func (c *Client) offerNew() (*clientConnection, error) {
 
 func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 	for {
-		conn, err := c.offer()
+		conn, err := c.offer(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -147,6 +149,7 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 			conn.releaseStream(false)
 			return nil, err
 		}
+		adapter.TraceSessionSelection(ctx, conn.metadata)
 		keepSession := adapter.KeepSessionFromContext(ctx)
 		return &StreamWrapper{Conn: conn.Conn, Stream: stream, onClose: func() { conn.releaseStream(keepSession) }}, nil
 	}

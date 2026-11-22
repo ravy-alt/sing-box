@@ -183,7 +183,9 @@ func TestGroupImportURLTestRefreshAndStaleResults(t *testing.T) {
 	body.Store(document(newTarget.URL))
 	require.NoError(t, getSubscription(t, ctx, "sub").Refresh(ctx))
 	history := service.PtrFromContext[urltest.HistoryStorage](ctx)
-	require.Eventually(t, func() bool { return newCalls.Load() > 0 && history.LoadURLTestHistory("subscription/sub/same") != nil }, 2*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool {
+		return newCalls.Load() > 0 && history.LoadURLTestHistory("subscription/sub/same", "http://probe.invalid") != nil
+	}, 2*time.Second, time.Millisecond)
 	require.Equal(t, "subscription/sub/same", importGroup(t, ctx, "auto").Selected("tcp").Tag())
 }
 

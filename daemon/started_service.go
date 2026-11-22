@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	runtimeDebug "runtime/debug"
+	"slices"
 	"sync"
 	"time"
 
@@ -623,7 +624,7 @@ func (s *StartedService) readGroups() *Groups {
 			var item GroupItem
 			item.Tag = adapter.OutboundDisplayName(boxService.ctx, itemTag)
 			item.Type = itemOutbound.Type()
-			if history := historyStorage.LoadURLTestHistory(group.RealTag(itemOutbound, N.NetworkTCP)); history != nil {
+			if history := historyStorage.LoadOutboundHistory(itemOutbound, urltest.OutboundTestURL(iGroup)); history != nil {
 				item.UrlTestTime = history.Time.Unix()
 				item.UrlTestDelay = int32(history.Delay)
 			}
@@ -731,10 +732,10 @@ func (s *StartedService) URLTest(ctx context.Context, request *URLTestRequest) (
 		return nil, status.Error(codes.NotFound, "outbound not found: "+outboundTag)
 	}
 	historyStorage := boxService.urlTestHistoryStorage
-	urlTest, isURLTest := outbound.(*group.URLTest)
 	outboundGroup, isOutboundGroup := adapter.OutboundGroupFor(outbound)
+	urlTestGroup, isURLTest := outboundGroup.(adapter.URLTestGroup)
 	if isURLTest {
-		go urlTest.CheckOutbounds()
+		go urlTestGroup.URLTest(boxService.ctx)
 	} else if isOutboundGroup {
 		outbounds := common.FilterNotNil(common.Map(outboundGroup.All(), func(it string) adapter.Outbound {
 			itOutbound, _ := boxService.outboundManager.Outbound(it)
@@ -743,15 +744,18 @@ func (s *StartedService) URLTest(ctx context.Context, request *URLTestRequest) (
 		go group.URLTestOutbounds(boxService.ctx, boxService.outboundManager, historyStorage, boxService.logFactory.Logger(), outbounds, "", 0, true)
 	} else {
 		go func() {
-			t, err := urltest.URLTest(boxService.ctx, "", outbound)
-			if err != nil {
-				historyStorage.DeleteURLTestHistory(outboundTag)
-			} else {
-				historyStorage.StoreURLTestHistory(outboundTag, &adapter.URLTestHistory{
-					Time:  time.Now(),
-					Delay: t,
-				})
+			updates := service.PtrFromContext[adapter.GroupUpdates](boxService.ctx)
+			var revision uint64
+			if updates != nil {
+				revision, _ = updates.State()
 			}
+			observation := urltest.URLTestWithResult(boxService.ctx, urltest.OutboundTestURL(outbound), outbound)
+			if updates != nil {
+				updates.Commit(revision, func() { observation.Store(historyStorage) })
+			} else {
+				observation.Store(historyStorage)
+			}
+
 		}()
 	}
 	return &emptypb.Empty{}, nil
@@ -881,6 +885,7 @@ func (s *StartedService) SubscribeConnections(request *SubscribeConnectionsReque
 }
 
 type connectionSnapshot struct {
+	chain      []string
 	uplink     int64
 	downlink   int64
 	hadTraffic bool
@@ -907,6 +912,7 @@ func (s *StartedService) buildInitialConnectionState(manager *trafficcontrol.Man
 			Connection: buildConnectionProto(metadata),
 		})
 		snapshots[metadata.ID] = connectionSnapshot{
+			chain:    slices.Clone(metadata.Chain),
 			uplink:   metadata.Upload.Load(),
 			downlink: metadata.Download.Load(),
 		}
@@ -932,6 +938,7 @@ func (s *StartedService) applyConnectionEvent(event trafficcontrol.ConnectionEve
 			return nil
 		}
 		snapshots[event.ID] = connectionSnapshot{
+			chain:    slices.Clone(event.Metadata.Chain),
 			uplink:   event.Metadata.Upload.Load(),
 			downlink: event.Metadata.Download.Load(),
 		}
@@ -977,6 +984,7 @@ func (s *StartedService) buildTrafficUpdates(manager *trafficcontrol.Manager, sn
 		snapshot, exists := snapshots[metadata.ID]
 		if !exists {
 			snapshots[metadata.ID] = connectionSnapshot{
+				chain:    slices.Clone(metadata.Chain),
 				uplink:   currentUpload,
 				downlink: currentDownload,
 			}
@@ -986,6 +994,11 @@ func (s *StartedService) buildTrafficUpdates(manager *trafficcontrol.Manager, sn
 				Connection: buildConnectionProto(metadata),
 			})
 			continue
+		}
+		if !slices.Equal(snapshot.chain, metadata.Chain) {
+			snapshot.chain = slices.Clone(metadata.Chain)
+			snapshots[metadata.ID] = snapshot
+			events = append(events, &ConnectionEvent{Type: ConnectionEventType_CONNECTION_EVENT_UPDATE, Id: metadata.ID.String(), Connection: buildConnectionProto(metadata)})
 		}
 		uplinkDelta := currentUpload - snapshot.uplink
 		downlinkDelta := currentDownload - snapshot.downlink
@@ -1113,10 +1126,7 @@ func (s *StartedService) CloseConnection(ctx context.Context, request *CloseConn
 	if boxService.trafficManager == nil {
 		return nil, status.Error(codes.Unimplemented, "connection tracking not available")
 	}
-	targetConn := boxService.trafficManager.Connection(uuid.FromStringOrNil(request.Id))
-	if targetConn != nil {
-		targetConn.Close()
-	}
+	boxService.trafficManager.CloseConnection(uuid.FromStringOrNil(request.Id))
 	return &emptypb.Empty{}, nil
 }
 
@@ -1201,7 +1211,7 @@ func (s *StartedService) SubscribeOutbounds(_ *emptypb.Empty, server grpc.Server
 					Tag:  adapter.OutboundDisplayName(boxService.ctx, ob.Tag()),
 					Type: ob.Type(),
 				}
-				if history := historyStorage.LoadURLTestHistory(group.RealTag(ob, N.NetworkTCP)); history != nil {
+				if history := historyStorage.LoadOutboundHistory(ob, urltest.OutboundTestURL(ob)); history != nil {
 					item.UrlTestTime = history.Time.Unix()
 					item.UrlTestDelay = int32(history.Delay)
 				}
@@ -1212,7 +1222,7 @@ func (s *StartedService) SubscribeOutbounds(_ *emptypb.Empty, server grpc.Server
 					Tag:  adapter.OutboundDisplayName(boxService.ctx, ep.Tag()),
 					Type: ep.Type(),
 				}
-				if history := historyStorage.LoadURLTestHistory(group.RealTag(ep, N.NetworkTCP)); history != nil {
+				if history := historyStorage.LoadOutboundHistory(ep, urltest.OutboundTestURL(ep)); history != nil {
 					item.UrlTestTime = history.Time.Unix()
 					item.UrlTestDelay = int32(history.Delay)
 				}

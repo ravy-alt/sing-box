@@ -39,6 +39,8 @@ func (m *member) GroupControl() (adapter.OutboundGroup, bool) {
 			result = &managedSubscription{&managedSelector{group}}
 		} else if _, ok := outbound.(adapter.SelectableOutboundGroup); ok {
 			result = &managedSelector{group}
+		} else if _, ok := outbound.(adapter.SmartURLTestGroup); ok {
+			result = &managedSmartURLTest{&managedURLTest{group}}
 		} else if _, ok := outbound.(adapter.URLTestGroup); ok {
 			result = &managedURLTest{group}
 		} else {
@@ -105,6 +107,37 @@ func (g *managedSelector) SelectOutbound(tag string) (selected bool) {
 }
 
 type managedURLTest struct{ *managedGroup }
+
+func (g *managedGroup) TestURL() (link string) {
+	_ = g.control(func(outbound adapter.Outbound) error {
+		if configured, ok := outbound.(interface{ TestURL() string }); ok {
+			link = configured.TestURL()
+		}
+		return nil
+	})
+	return
+}
+
+type managedSmartURLTest struct{ *managedURLTest }
+
+func (g *managedSmartURLTest) DynamicSelection() {}
+func (g *managedSmartURLTest) TestURL() (link string) {
+	_ = g.control(func(outbound adapter.Outbound) error {
+		if smart, ok := outbound.(adapter.SmartURLTestGroup); ok {
+			link = smart.TestURL()
+		}
+		return nil
+	})
+	return
+}
+func (g *managedSmartURLTest) ClearCache() {
+	_ = g.control(func(outbound adapter.Outbound) error {
+		if smart, ok := outbound.(adapter.SmartURLTestGroup); ok {
+			smart.ClearCache()
+		}
+		return nil
+	})
+}
 
 func (g *managedGroup) test(ctx context.Context) (result map[string]uint16, err error) {
 	err = g.control(func(outbound adapter.Outbound) error {
