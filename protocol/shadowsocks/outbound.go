@@ -83,6 +83,13 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	return outbound, nil
 }
 
+func (h *Outbound) DialerNetwork(network string) string {
+	if network == N.NetworkUDP && h.uotClient == nil && h.multiplexDialer == nil {
+		return N.NetworkUDP
+	}
+	return adapter.DialerNetworkFor(h.plugin, N.NetworkTCP)
+}
+
 func (h *Outbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
 	ctx, metadata := adapter.ExtendContext(ctx)
 	metadata.Outbound = h.Tag()

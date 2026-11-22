@@ -57,6 +57,7 @@ func parseECHClientConfig(ctx context.Context, clientConfig ECHCapableConfig, op
 			dnsRouter:        service.FromContext[adapter.DNSRouter](ctx),
 			domainResolver:   domainResolver,
 			queryServerName:  options.ECH.QueryServerName,
+			dnsServer:        directResolver,
 		}, nil
 	}
 }
@@ -113,6 +114,7 @@ func parseECHKeys(echKey []byte) ([]tls.EncryptedClientHelloKey, error) {
 }
 
 type ECHClientConfig struct {
+	dnsServer bool
 	ECHCapableConfig
 	access          sync.Mutex
 	ctx             context.Context
@@ -167,7 +169,13 @@ func (s *ECHClientConfig) fetchLocked(ctx context.Context) error {
 		if err != nil {
 			return E.Cause(err, "fetch ECH config list")
 		}
-		response, err := s.dnsRouter.Exchange(ctx, message, queryOptions)
+		purpose := "proxy-server"
+		if s.dnsServer {
+			purpose = "dns-server"
+		}
+		queryCtx := adapter.ContextWithDNSQueryInfo(ctx, adapter.DNSQueryInfo{Purpose: purpose})
+		queryCtx, _ = adapter.ContextWithDNSQueryTrace(queryCtx)
+		response, err := s.dnsRouter.Exchange(queryCtx, message, queryOptions)
 		if err != nil {
 			return E.Cause(err, "fetch ECH config list")
 		}

@@ -17,6 +17,7 @@ import (
 )
 
 type Options struct {
+	DiagnosticPurpose       string
 	Context                 context.Context
 	Options                 option.DialerOptions
 	RemoteIsDomain          bool
@@ -88,6 +89,15 @@ func NewWithOptions(options Options) (N.Dialer, error) {
 			//nolint:staticcheck
 			dnsQueryOptions.Strategy = C.DomainStrategy(dialOptions.DomainStrategy)
 			deprecated.Report(options.Context, deprecated.OptionLegacyDomainStrategyOptions)
+		}
+		if options.DiagnosticPurpose != "" {
+			dnsQueryOptions.DiagnosticPurpose = options.DiagnosticPurpose
+		} else if options.DirectOutbound {
+			dnsQueryOptions.DiagnosticPurpose = "internal"
+		} else if options.DirectResolver {
+			dnsQueryOptions.DiagnosticPurpose = "dns-server"
+		} else {
+			dnsQueryOptions.DiagnosticPurpose = "proxy-server"
 		}
 		dialer = NewResolveDialer(
 			options.Context,

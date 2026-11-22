@@ -113,20 +113,25 @@ func (t *RaceTransport) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.
 		server   string
 		response *mDNS.Msg
 		err      error
+		actual   string
 	}
 	results := make(chan result, len(t.servers))
 	for _, server := range t.servers {
 		// DNS transports may mutate IDs, questions and EDNS fields while packing.
 		query := message.Copy()
 		go func() {
-			response, err := server.Exchange(ctx, query)
-			results <- result{server.Tag(), response, err}
+			childCtx, trace := adapter.ContextWithDNSQueryTrace(ctx)
+			response, err := server.Exchange(childCtx, query)
+			results <- result{server.Tag(), response, err, trace.Server(server.Tag())}
 		}()
 	}
 	var negative *mDNS.Msg
+	var negativeServer string
+	setServer := func(server string) { adapter.DNSQueryTraceFromContext(parent).SetServer(server) }
 	var failures []error
 	canceled := func() (*mDNS.Msg, error) {
 		if parent.Err() == nil && t.ctx.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) && negative != nil {
+			setServer(negativeServer)
 			return negative, nil
 		}
 		return nil, errors.Join(append(failures, ctx.Err())...)
@@ -153,12 +158,15 @@ func (t *RaceTransport) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.
 			}
 			if response.Rcode == mDNS.RcodeSuccess {
 				if raceHasAnswer(response, message.Question[0].Qtype) {
+					setServer(r.actual)
 					return response, nil // cancel slower or failing private upstreams
 				}
 				negative = response
+				negativeServer = r.actual
 			} else if response.Rcode == mDNS.RcodeNameError {
 				if negative == nil {
 					negative = response
+					negativeServer = r.actual
 				}
 			} else {
 				failures = append(failures, E.Cause(dns.RcodeError(response.Rcode), r.server))
@@ -166,6 +174,7 @@ func (t *RaceTransport) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.
 		}
 	}
 	if negative != nil {
+		setServer(negativeServer)
 		return negative, nil
 	}
 	return nil, errors.Join(failures...)

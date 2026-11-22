@@ -10,6 +10,7 @@ import (
 )
 
 var bucketDNSCache = []byte("dns_cache")
+var bucketDNSCacheInfo = []byte("dns_cache_info")
 
 func (c *CacheFile) StoreDNS() bool {
 	return c.storeDNS
@@ -52,6 +53,8 @@ func (c *CacheFile) LoadDNSCache(transportName string, qName string, qType uint1
 }
 
 func (c *CacheFile) SaveDNSCache(transportName string, qName string, qType uint16, rawMessage []byte, expireAt time.Time) error {
+	c.dnsCacheWriteAccess.Lock()
+	defer c.dnsCacheWriteAccess.Unlock()
 	value := buf.Get(8 + len(rawMessage))
 	defer buf.Put(value)
 	binary.BigEndian.PutUint64(value[:8], uint64(expireAt.Unix()))
@@ -82,21 +85,31 @@ func (c *CacheFile) SaveDNSCacheAsync(transportName string, qName string, qType 
 }
 
 func (c *CacheFile) queueDNSCacheSave(saveKey saveCacheKey, rawMessage []byte, expireAt time.Time) bool {
+	c.dnsCacheWriteAccess.Lock()
+	defer c.dnsCacheWriteAccess.Unlock()
 	c.saveDNSCacheAccess.Lock()
 	defer c.saveDNSCacheAccess.Unlock()
+	if c.dnsCacheClosing {
+		return false
+	}
 	entry := c.saveDNSCache[saveKey]
 	entry.rawMessage = append([]byte(nil), rawMessage...)
 	entry.expireAt = expireAt
-	entry.sequence++
+	c.dnsCacheSequence++
+	entry.sequence = c.dnsCacheSequence
 	startFlush := !entry.saving
+	if startFlush {
+		c.dnsCacheWorkers.Add(1)
+	}
 	entry.saving = true
 	c.saveDNSCache[saveKey] = entry
 	return startFlush
 }
 
 func (c *CacheFile) flushPendingDNSCache(saveKey saveCacheKey, logger logger.Logger) {
+	defer c.dnsCacheWorkers.Done()
 	c.flushPendingDNSCacheWith(saveKey, logger, func(entry saveDNSCacheEntry) error {
-		return c.SaveDNSCache(saveKey.TransportName, saveKey.QuestionName, saveKey.QType, entry.rawMessage, entry.expireAt)
+		return c.saveDNSCacheRecord(saveKey, entry)
 	})
 }
 
@@ -109,7 +122,7 @@ func (c *CacheFile) flushPendingDNSCacheWith(saveKey saveCacheKey, logger logger
 			return
 		}
 		err := save(entry)
-		if err != nil {
+		if err != nil && logger != nil {
 			logger.Warn("save DNS cache: ", err)
 		}
 		c.saveDNSCacheAccess.Lock()
@@ -129,10 +142,23 @@ func (c *CacheFile) flushPendingDNSCacheWith(saveKey saveCacheKey, logger logger
 }
 
 func (c *CacheFile) ClearDNSCache() error {
+	c.dnsCacheWriteAccess.Lock()
+	defer c.dnsCacheWriteAccess.Unlock()
 	c.saveDNSCacheAccess.Lock()
 	clear(c.saveDNSCache)
 	c.saveDNSCacheAccess.Unlock()
 	return c.batch(func(tx *bbolt.Tx) error {
+		if bucket := c.bucket(tx, bucketDNSCacheInfo); bucket != nil {
+			if c.cacheID == nil {
+				if err := tx.DeleteBucket(bucketDNSCacheInfo); err != nil {
+					return err
+				}
+			} else {
+				if err := tx.Bucket(c.cacheID).DeleteBucket(bucketDNSCacheInfo); err != nil {
+					return err
+				}
+			}
+		}
 		if c.cacheID == nil {
 			bucket := tx.Bucket(bucketDNSCache)
 			if bucket == nil {
@@ -194,6 +220,13 @@ func (c *CacheFile) cleanupDNSCache() {
 			}
 			for _, key := range expiredKeys {
 				err = transportBucket.Delete(key)
+				if infos := c.bucket(tx, bucketDNSCacheInfo); infos != nil {
+					if infoBucket := infos.Bucket(transportName); infoBucket != nil {
+						if deleteErr := infoBucket.Delete(key); deleteErr != nil {
+							return deleteErr
+						}
+					}
+				}
 				if err != nil {
 					return err
 				}
@@ -209,6 +242,11 @@ func (c *CacheFile) cleanupDNSCache() {
 		}
 		for _, name := range emptyTransports {
 			err = bucket.DeleteBucket(name)
+			if infos := c.bucket(tx, bucketDNSCacheInfo); infos != nil && infos.Bucket(name) != nil {
+				if deleteErr := infos.DeleteBucket(name); deleteErr != nil {
+					return deleteErr
+				}
+			}
 			if err != nil {
 				return err
 			}

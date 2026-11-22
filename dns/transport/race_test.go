@@ -26,6 +26,24 @@ type raceTestUpstream struct {
 	exchange func(context.Context, *mDNS.Msg) (*mDNS.Msg, error)
 }
 
+func TestDNSRaceDiagnosticWinner(t *testing.T) {
+	ctx, trace := adapter.ContextWithDNSQueryTrace(context.Background())
+	group := raceTestGroup(t, time.Second,
+		func(ctx context.Context, q *mDNS.Msg) (*mDNS.Msg, error) {
+			<-ctx.Done()
+			adapter.DNSQueryTraceFromContext(ctx).SetServer("loser")
+			return nil, ctx.Err()
+		},
+		func(ctx context.Context, q *mDNS.Msg) (*mDNS.Msg, error) {
+			adapter.DNSQueryTraceFromContext(ctx).SetServer("nested-winner")
+			return raceTestReply(q, mDNS.RcodeSuccess, "192.0.2.1"), nil
+		},
+	)
+	_, err := group.Exchange(ctx, new(mDNS.Msg).SetQuestion("example.com.", mDNS.TypeA))
+	require.NoError(t, err)
+	require.Equal(t, "nested-winner", trace.Server("race"))
+}
+
 func (*raceTestUpstream) Start(adapter.StartStage, *adapter.Scope) error { return nil }
 func (*raceTestUpstream) Reset()                                         {}
 func (u *raceTestUpstream) Exchange(ctx context.Context, q *mDNS.Msg) (*mDNS.Msg, error) {

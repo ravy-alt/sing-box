@@ -94,6 +94,8 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 	}, nil
 }
 
+func (c *Client) DialerNetwork(string) string { return N.NetworkUDP }
+
 func (c *Client) offer(request context.Context) (*clientConnection, error) {
 	conn := c.conn.Load()
 	if conn != nil && conn.active() {

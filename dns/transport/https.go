@@ -267,3 +267,9 @@ func (t *HTTPSTransport) exchange(ctx context.Context, message *mDNS.Msg) (*mDNS
 	}
 	return &responseMessage, nil
 }
+
+func (t *HTTPSTransport) DNSInfo() adapter.DNSServerInfo {
+	info := t.TransportAdapter.DNSInfo()
+	info.Address = "https://" + t.serverAddr.String() + t.destination.EscapedPath()
+	return info
+}

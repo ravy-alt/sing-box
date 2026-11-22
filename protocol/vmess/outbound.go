@@ -117,6 +117,10 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	return outbound, nil
 }
 
+func (h *Outbound) DialerNetwork(string) string {
+	return adapter.DialerNetworkFor(h.transport, N.NetworkTCP)
+}
+
 func (h *Outbound) MultiplexEnabled() bool {
 	if h.multiplexDialer != nil {
 		return true

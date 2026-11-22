@@ -210,3 +210,9 @@ func (t *HTTP3Transport) ExchangeAsync(ctx context.Context, message *mDNS.Msg, c
 		callback(t.Exchange(ctx, message))
 	}()
 }
+
+func (t *HTTP3Transport) DNSInfo() adapter.DNSServerInfo {
+	info := t.TransportAdapter.DNSInfo()
+	info.Address = "https://" + t.serverAddr.String() + t.destination.EscapedPath()
+	return info
+}

@@ -16,6 +16,7 @@ import (
 
 func NewTransport(ctx context.Context, logger logger.ContextLogger, tag string, options option.HTTPClientOptions) (*ManagedTransport, error) {
 	rawDialer, err := dialer.NewWithOptions(dialer.Options{
+		DiagnosticPurpose:       "internal",
 		Context:                 ctx,
 		Options:                 options.DialerOptions,
 		RemoteIsDomain:          true,

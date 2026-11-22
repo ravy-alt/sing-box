@@ -33,6 +33,7 @@ var (
 		string(bucketRuleSet),
 		string(bucketRDRC),
 		string(bucketDNSCache),
+		string(bucketDNSCacheInfo),
 	}
 
 	cacheIDDefault = []byte("default")
@@ -41,30 +42,34 @@ var (
 var _ adapter.CacheFile = (*CacheFile)(nil)
 
 type CacheFile struct {
-	ctx                context.Context
-	logger             logger.Logger
-	path               string
-	cacheID            []byte
-	cacheIDText        string
-	storeFakeIP        bool
-	storeRDRC          bool
-	storeDNS           bool
-	disableExpire      bool
-	rdrcTimeout        time.Duration
-	optimisticTimeout  time.Duration
-	DB                 *bbolt.DB
-	dbAccess           sync.RWMutex
-	saveMetadataAccess sync.Mutex
-	saveMetadata       *adapter.FakeIPMetadata
-	saveMetadataTimer  *time.Timer
-	saveFakeIPAccess   sync.RWMutex
-	saveDomain         map[netip.Addr]string
-	saveAddress4       map[string]netip.Addr
-	saveAddress6       map[string]netip.Addr
-	saveRDRCAccess     sync.RWMutex
-	saveRDRC           map[saveCacheKey]bool
-	saveDNSCacheAccess sync.RWMutex
-	saveDNSCache       map[saveCacheKey]saveDNSCacheEntry
+	ctx                 context.Context
+	logger              logger.Logger
+	path                string
+	cacheID             []byte
+	cacheIDText         string
+	storeFakeIP         bool
+	storeRDRC           bool
+	storeDNS            bool
+	disableExpire       bool
+	rdrcTimeout         time.Duration
+	optimisticTimeout   time.Duration
+	DB                  *bbolt.DB
+	dbAccess            sync.RWMutex
+	saveMetadataAccess  sync.Mutex
+	saveMetadata        *adapter.FakeIPMetadata
+	saveMetadataTimer   *time.Timer
+	saveFakeIPAccess    sync.RWMutex
+	saveDomain          map[netip.Addr]string
+	saveAddress4        map[string]netip.Addr
+	saveAddress6        map[string]netip.Addr
+	saveRDRCAccess      sync.RWMutex
+	saveRDRC            map[saveCacheKey]bool
+	dnsCacheWriteAccess sync.Mutex
+	dnsCacheSequence    uint64
+	dnsCacheClosing     bool
+	dnsCacheWorkers     sync.WaitGroup
+	saveDNSCacheAccess  sync.RWMutex
+	saveDNSCache        map[saveCacheKey]saveDNSCacheEntry
 }
 
 type saveCacheKey struct {
@@ -74,6 +79,7 @@ type saveCacheKey struct {
 }
 
 type saveDNSCacheEntry struct {
+	info       adapter.DNSQueryInfo
 	rawMessage []byte
 	expireAt   time.Time
 	sequence   uint64
@@ -148,6 +154,10 @@ func (c *CacheFile) Start(stage adapter.StartStage, scope *adapter.Scope) error 
 			return err
 		}
 		scope.Add(func() error {
+			c.saveDNSCacheAccess.Lock()
+			c.dnsCacheClosing = true
+			c.saveDNSCacheAccess.Unlock()
+			c.dnsCacheWorkers.Wait()
 			return c.database().Close()
 		})
 	case adapter.StartStateStart:

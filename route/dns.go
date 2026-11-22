@@ -19,6 +19,7 @@ import (
 
 func (r *Router) hijackDNSStream(ctx context.Context, conn net.Conn, metadata adapter.InboundContext) error {
 	r.searchProcessInfo(ctx, &metadata)
+	ctx = adapter.CaptureDNSQueryInfo(adapter.WithContext(ctx, &metadata))
 	metadata.Destination = M.Socksaddr{}
 	err := N.ReportConnHandshakeSuccess(conn, conn)
 	if err != nil {
@@ -62,6 +63,7 @@ func (r *Router) HijackDNSPacket(ctx context.Context, payload []byte, writer N.P
 	}
 	r.searchProcessInfo(ctx, &metadata)
 	destination := metadata.Destination
+	ctx = adapter.CaptureDNSQueryInfo(adapter.WithContext(ctx, &metadata))
 	metadata.Destination = M.Socksaddr{}
 	r.dns.ExchangeAsync(adapter.WithContext(ctx, &metadata), &message, adapter.DNSQueryOptions{}, func(response *mDNS.Msg, exchangeErr error) {
 		if exchangeErr == nil {

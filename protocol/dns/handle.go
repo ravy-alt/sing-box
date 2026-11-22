@@ -39,7 +39,7 @@ func HandleStreamDNSRequest(ctx context.Context, router adapter.DNSRouter, conn 
 		return err
 	}
 	metadataInQuery := metadata
-	router.ExchangeAsync(adapter.WithContext(ctx, &metadataInQuery), &message, adapter.DNSQueryOptions{}, func(response *mDNS.Msg, err error) {
+	router.ExchangeAsync(adapter.CaptureDNSQueryInfo(adapter.WithContext(ctx, &metadataInQuery)), &message, adapter.DNSQueryOptions{}, func(response *mDNS.Msg, err error) {
 		if err != nil {
 			conn.Close()
 			return
@@ -127,7 +127,7 @@ func NewDNSPacketConnection(ctx context.Context, router adapter.DNSRouter, conn 
 				timeout.Update()
 			}
 			metadataInQuery := metadata
-			router.ExchangeAsync(adapter.WithContext(ctx, &metadataInQuery), &message, adapter.DNSQueryOptions{}, func(response *mDNS.Msg, err error) {
+			router.ExchangeAsync(packetDNSQueryContext(ctx, &metadataInQuery, destination), &message, adapter.DNSQueryOptions{}, func(response *mDNS.Msg, err error) {
 				if err != nil {
 					cancel(err)
 					return
@@ -197,7 +197,7 @@ func newDNSPacketConnection(ctx context.Context, router adapter.DNSRouter, conn 
 				timeout.Update()
 			}
 			metadataInQuery := metadata
-			router.ExchangeAsync(adapter.WithContext(ctx, &metadataInQuery), &message, adapter.DNSQueryOptions{}, func(response *mDNS.Msg, err error) {
+			router.ExchangeAsync(packetDNSQueryContext(ctx, &metadataInQuery, destination), &message, adapter.DNSQueryOptions{}, func(response *mDNS.Msg, err error) {
 				if err != nil {
 					cancel(err)
 					return
@@ -219,4 +219,13 @@ func newDNSPacketConnection(ctx context.Context, router adapter.DNSRouter, conn 
 		conn.Close()
 	})
 	return group.Run(fastClose)
+}
+
+// DNS rule matching intentionally sees an empty destination. Preserve the actual
+// packet endpoint separately, including when one UDP session queries several DNS servers.
+func packetDNSQueryContext(ctx context.Context, metadata *adapter.InboundContext, destination M.Socksaddr) context.Context {
+	return adapter.ContextWithDNSQueryInfo(adapter.WithContext(ctx, metadata), adapter.DNSQueryInfo{
+		Purpose: "client", Source: metadata.Source.AddrString(), SourcePort: metadata.Source.Port,
+		Destination: destination.AddrString(), DestinationPort: destination.Port,
+	})
 }

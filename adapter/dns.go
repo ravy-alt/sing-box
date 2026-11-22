@@ -33,6 +33,9 @@ type DNSClient interface {
 }
 
 type DNSQueryOptions struct {
+	DiagnosticPurpose string
+	// DiagnosticRule is observation-only and never participates in cache keys.
+	DiagnosticRule         string
 	Transport              DNSTransport
 	Strategy               C.DomainStrategy
 	LookupStrategy         C.DomainStrategy

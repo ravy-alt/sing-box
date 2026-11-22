@@ -44,6 +44,7 @@ func (d *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (n
 }
 
 func (d *Outbound) NewConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
+	ctx = adapter.CaptureDNSQueryInfo(adapter.WithContext(ctx, &metadata))
 	metadata.Destination = M.Socksaddr{}
 	for {
 		conn.SetReadDeadline(time.Now().Add(C.DNSTimeout))

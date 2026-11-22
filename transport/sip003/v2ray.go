@@ -110,6 +110,10 @@ type v2rayMuxWrapper struct {
 	adapter.V2RayClientTransport
 }
 
+func (w *v2rayMuxWrapper) DialerNetwork(network string) string {
+	return adapter.DialerNetworkFor(w.V2RayClientTransport, network)
+}
+
 func (w *v2rayMuxWrapper) DialContext(ctx context.Context) (net.Conn, error) {
 	conn, err := w.V2RayClientTransport.DialContext(ctx)
 	if err != nil {

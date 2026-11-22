@@ -180,3 +180,27 @@ Cache file path, `cache.db` will be used if empty.
 Identifier in cache file.
 
 If not empty, configuration specified data will use a separate store keyed by it.
+## DNS management extension
+
+This branch advertises `dns-management-v1` in the `capabilities` array of `GET /version`. Clients must check this capability before using the extension. Existing Clash API authentication applies, including the `token` query parameter for WebSockets.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /dns/cache` | Snapshot of usable cache entries |
+| `WS /dns/cache` | Initial snapshot, then one-second deltas/heartbeats |
+| `DELETE /dns/cache` | Clear caches in all scopes |
+| `DELETE /dns/cache?id=…` | Delete one opaque cache ID |
+| `DELETE /dns/cache?scope=…&server=…` | Clear one server's cache in a scope |
+| `GET /dns/servers` | Server addresses, types, dialer chains, resolvers and cache counts |
+| `GET /dns/rules` | DNS conditions and actions, including the default rule |
+| `GET /dns/query?name=…&type=A&scope=…&server=…` | Rule-based or explicitly selected-server query; adds actual `Server` and `Trace` to the existing response |
+
+The empty scope denotes the host configuration. Subscription DNS routers have separate scopes; preserve returned scope, tag and ID values when addressing them. Omitting `server` enables rule matching. The dashboard issues separate A and AAAA queries by default, each with its own result trace.
+
+`dialerChain` follows the DNS transport's primary network: TCP for TCP/DoT/DoH, UDP for UDP/DoQ/DoH3. Each proxy's encapsulation determines the next hop's network, including UoT, multiplexing and QUIC transports. Nested groups follow their current selection for that network. Subscription inspection retains the declaring generations while walking private groups and detours, so a concurrent refresh cannot replace part of the chain with another generation.
+
+Entries represent actual memory or persistent caches, not a query log. Their `request` describes the latest request using the entry. Source/destination ports belong to the received DNS request, not the upstream socket. Internal proxy-server and DNS-server hostname lookups have distinct purposes and no client ports. Older persistent entries have unknown request metadata until used again.
+
+`server` identifies the cache owner; `request.server` identifies a race transport's winning upstream. A null `expiresAt` means expiry is disabled. Usable optimistic entries remain visible with `stale: true`; unusable entries disappear. Background refresh preserves the latest request metadata. Deletion prevents queries that started before the operation from resurrecting cleared answers; new queries may cache again.
+
+Stream frames contain `{full, revision, entries, removed}`. Replace the local view on `full: true`; otherwise upsert entries by ID and apply removals. Revisions start at 1 on each connection. Never debounce or discard deltas; reconnect for a full snapshot after a gap. Close the stream when pausing, switching backends or leaving the page. The server detects disconnects/shutdown, bounds write time and does not queue unbounded events for slow clients.

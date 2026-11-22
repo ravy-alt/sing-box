@@ -16,7 +16,10 @@ type SubscriptionHostOptions struct{ Options option.Options }
 
 // SubscriptionScopeOptions retains this candidate's declarations for validating
 // source-only references after nested providers become available.
-type SubscriptionScopeOptions struct{ Options option.Options }
+type SubscriptionScopeOptions struct {
+	Options option.Options
+	Scope   string
+}
 
 type SelectableOutboundGroup interface {
 	OutboundGroup

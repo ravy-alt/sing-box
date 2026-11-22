@@ -379,7 +379,7 @@ func (s *Subscription) buildResources(buildCtx context.Context, content []byte, 
 	}
 	ctx = g.scope.Context()
 	service.MustRegisterPtr(ctx, g)
-	service.MustRegisterPtr(ctx, &adapter.SubscriptionScopeOptions{Options: doc.options})
+	service.MustRegisterPtr(ctx, &adapter.SubscriptionScopeOptions{Options: doc.options, Scope: s.Tag()})
 	startupCtx, cancelStartup := context.WithCancel(ctx)
 	stopStartup := context.AfterFunc(buildCtx, cancelStartup)
 	defer stopStartup()

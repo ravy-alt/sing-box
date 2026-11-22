@@ -37,10 +37,11 @@ var _ adapter.OutboundWithMultiplex = (*Outbound)(nil)
 
 type Outbound struct {
 	outbound.Adapter
-	ctx       context.Context
-	logger    logger.ContextLogger
-	client    *cronet.NaiveClient
-	uotClient *uot.Client
+	dialerNetwork string
+	ctx           context.Context
+	logger        logger.ContextLogger
+	client        *cronet.NaiveClient
+	uotClient     *uot.Client
 }
 
 func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.NaiveOutboundOptions) (adapter.Outbound, error) {
@@ -214,14 +215,21 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	} else {
 		networks = []string{N.NetworkTCP}
 	}
+	dialerNetwork := N.NetworkTCP
+	if options.QUIC {
+		dialerNetwork = N.NetworkUDP
+	}
 	return &Outbound{
-		Adapter:   outbound.NewAdapterWithDialerOptions(C.TypeNaive, tag, networks, options.DialerOptions),
-		ctx:       ctx,
-		logger:    logger,
-		client:    client,
-		uotClient: uotClient,
+		dialerNetwork: dialerNetwork,
+		Adapter:       outbound.NewAdapterWithDialerOptions(C.TypeNaive, tag, networks, options.DialerOptions),
+		ctx:           ctx,
+		logger:        logger,
+		client:        client,
+		uotClient:     uotClient,
 	}, nil
 }
+
+func (h *Outbound) DialerNetwork(string) string { return h.dialerNetwork }
 
 func (h *Outbound) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 	if stage != adapter.StartStateStart {

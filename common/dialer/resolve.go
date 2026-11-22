@@ -102,7 +102,7 @@ func (d *resolveDialer) DialContext(ctx context.Context, network string, destina
 		return d.dialer.DialContext(ctx, network, destination)
 	}
 	ctx = log.ContextWithOverrideLevel(ctx, log.LevelDebug)
-	addresses, err := d.router.Lookup(ctx, destination.Fqdn, d.queryOptions)
+	addresses, err := d.router.Lookup(d.lookupContext(ctx), destination.Fqdn, d.queryOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +134,7 @@ func (d *resolveDialer) ListenPacketWithDestination(ctx context.Context, destina
 		return conn, netip.Addr{}, err
 	}
 	ctx = log.ContextWithOverrideLevel(ctx, log.LevelDebug)
-	addresses, err := d.router.Lookup(ctx, destination.Fqdn, d.queryOptions)
+	addresses, err := d.router.Lookup(d.lookupContext(ctx), destination.Fqdn, d.queryOptions)
 	if err != nil {
 		return nil, netip.Addr{}, err
 	}
@@ -158,7 +158,7 @@ func (d *resolveParallelNetworkDialer) DialParallelInterface(ctx context.Context
 		return d.dialer.DialContext(ctx, network, destination)
 	}
 	ctx = log.ContextWithOverrideLevel(ctx, log.LevelDebug)
-	addresses, err := d.router.Lookup(ctx, destination.Fqdn, d.queryOptions)
+	addresses, err := d.router.Lookup(d.lookupContext(ctx), destination.Fqdn, d.queryOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +181,7 @@ func (d *resolveParallelNetworkDialer) ListenSerialInterfacePacket(ctx context.C
 		return d.dialer.ListenPacket(ctx, destination)
 	}
 	ctx = log.ContextWithOverrideLevel(ctx, log.LevelDebug)
-	addresses, err := d.router.Lookup(ctx, destination.Fqdn, d.queryOptions)
+	addresses, err := d.router.Lookup(d.lookupContext(ctx), destination.Fqdn, d.queryOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -201,4 +201,16 @@ func (d *resolveParallelNetworkDialer) QueryOptions() adapter.DNSQueryOptions {
 
 func (d *resolveParallelNetworkDialer) Upstream() any {
 	return d.dialer
+}
+
+func (d *resolveDialer) lookupContext(ctx context.Context) context.Context {
+	purpose := d.queryOptions.DiagnosticPurpose
+	if purpose == "" {
+		purpose = "internal"
+	}
+	// These ports describe the DNS request, not the proxy/DNS server being dialed.
+	// Do not inherit the client DNS query's ports into an internal lookup.
+	ctx = adapter.ContextWithDNSQueryInfo(ctx, adapter.DNSQueryInfo{Purpose: purpose})
+	ctx, _ = adapter.ContextWithDNSQueryTrace(ctx)
+	return ctx
 }

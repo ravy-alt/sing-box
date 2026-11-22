@@ -87,7 +87,12 @@ func NewRouter(ctx context.Context, logFactory log.Factory, options option.DNSOp
 			optimisticTimeout = 3 * 24 * time.Hour
 		}
 	}
+	var cacheScope string
+	if scope := service.PtrFromContext[adapter.SubscriptionScopeOptions](ctx); scope != nil {
+		cacheScope = scope.Scope
+	}
 	router.client = NewClient(ClientOptions{
+		CacheScope:        cacheScope,
 		Context:           ctx,
 		Timeout:           time.Duration(options.DNSClientOptions.Timeout),
 		DisableCache:      options.DNSClientOptions.DisableCache,
@@ -637,7 +642,13 @@ func (r *Router) finalizeExchangeOptions(options adapter.DNSQueryOptions) adapte
 	return options
 }
 
-func (r *Router) walkDNSRules(ctx context.Context, rules []adapter.DNSRule, message *mDNS.Msg, state *dnsRuleWalkState, allowFakeIP bool) (exchangeWithRulesResult, *dnsWalkSuspension) {
+func (r *Router) walkDNSRules(ctx context.Context, rules []adapter.DNSRule, message *mDNS.Msg, state *dnsRuleWalkState, allowFakeIP bool) (result exchangeWithRulesResult, suspension *dnsWalkSuspension) {
+	var matchedRule string
+	defer func() {
+		if result.response != nil && matchedRule != "" {
+			r.completeDNSRule(ctx, result, matchedRule)
+		}
+	}()
 	metadata := adapter.ContextFrom(ctx)
 	if metadata == nil {
 		panic("no context")
@@ -683,6 +694,7 @@ func (r *Router) walkDNSRules(ctx context.Context, rules []adapter.DNSRule, mess
 							state.armedRules = nil
 							return exchangeWithRulesResult{}, &dnsWalkSuspension{pending: sweepPending}
 						}
+						matchedRule = "" // The armed rule already completed this response trace.
 						return sweepResult, nil
 					}
 				}
@@ -712,6 +724,7 @@ func (r *Router) walkDNSRules(ctx context.Context, rules []adapter.DNSRule, mess
 		if !currentRule.Match(metadata) {
 			continue
 		}
+		matchedRule = dnsRuleDescription(state.ruleIndex, currentRule)
 		if state.lastLoggedIndex != state.ruleIndex {
 			state.lastLoggedIndex = state.ruleIndex
 			r.logRuleMatch(ctx, state.ruleIndex, currentRule)
@@ -732,6 +745,7 @@ func (r *Router) walkDNSRules(ctx context.Context, rules []adapter.DNSRule, mess
 				return exchangeWithRulesResult{}, &dnsWalkSuspension{drain: true}
 			}
 			queryOptions := state.effectiveOptions
+			queryOptions.DiagnosticRule = dnsRuleDescription(state.ruleIndex, currentRule)
 			r.applyDNSRouteOptions(&queryOptions, action.RuleActionDNSRouteOptions)
 			future := r.launchDNSEvaluate(ctx, state, action.Tag, transport, message, queryOptions)
 			if action.Tag == "" {
@@ -775,6 +789,7 @@ func (r *Router) walkDNSRules(ctx context.Context, rules []adapter.DNSRule, mess
 			}, nil
 		case *R.RuleActionDNSRoute:
 			queryOptions := state.effectiveOptions
+			queryOptions.DiagnosticRule = dnsRuleDescription(state.ruleIndex, currentRule)
 			transport, status := r.resolveDNSRoute(action.Server, action.RuleActionDNSRouteOptions, allowFakeIP, &queryOptions)
 			switch status {
 			case dnsRouteStatusMissing:
@@ -824,7 +839,7 @@ func (r *Router) walkDNSRules(ctx context.Context, rules []adapter.DNSRule, mess
 	if len(state.armedRules) > 0 {
 		return exchangeWithRulesResult{}, &dnsWalkSuspension{drain: true}
 	}
-	return exchangeWithRulesResult{}, &dnsWalkSuspension{pending: &dnsPendingExchange{transport: r.transport.Default(), options: state.effectiveOptions}}
+	return exchangeWithRulesResult{}, &dnsWalkSuspension{pending: &dnsPendingExchange{transport: r.transport.Default(), options: defaultDNSDiagnosticOptions(state.effectiveOptions)}}
 }
 
 func (r *Router) exchangeWithRules(ctx context.Context, rules []adapter.DNSRule, message *mDNS.Msg, options adapter.DNSQueryOptions, allowFakeIP bool) exchangeWithRulesResult {
@@ -869,7 +884,13 @@ func (r *Router) resumeExchangeWithRules(ctx context.Context, rules []adapter.DN
 	}
 }
 
-func (r *Router) sweepArmedDNSRules(ctx context.Context, message *mDNS.Msg, state *dnsRuleWalkState, allowFakeIP bool) (exchangeWithRulesResult, *dnsPendingExchange, bool) {
+func (r *Router) sweepArmedDNSRules(ctx context.Context, message *mDNS.Msg, state *dnsRuleWalkState, allowFakeIP bool) (result exchangeWithRulesResult, pending *dnsPendingExchange, committed bool) {
+	var matchedRule string
+	defer func() {
+		if result.response != nil && matchedRule != "" {
+			r.completeDNSRule(ctx, result, matchedRule)
+		}
+	}()
 	metadata := adapter.ContextFrom(ctx)
 	for index := 0; index < len(state.armedRules); {
 		armed := state.armedRules[index]
@@ -900,6 +921,7 @@ func (r *Router) sweepArmedDNSRules(ctx context.Context, message *mDNS.Msg, stat
 		if !armed.rule.Match(metadata) {
 			continue
 		}
+		matchedRule = dnsRuleDescription(armed.ruleIndex, armed.rule)
 		r.logRuleMatch(ctx, armed.ruleIndex, armed.rule)
 		switch action := armed.rule.Action().(type) {
 		case *R.RuleActionRespond:
@@ -928,6 +950,7 @@ func (r *Router) sweepArmedDNSRules(ctx context.Context, message *mDNS.Msg, stat
 			}, nil, true
 		case *R.RuleActionDNSRoute:
 			queryOptions := armed.options
+			queryOptions.DiagnosticRule = dnsRuleDescription(armed.ruleIndex, armed.rule)
 			transport, status := r.resolveDNSRoute(action.Server, action.RuleActionDNSRouteOptions, allowFakeIP, &queryOptions)
 			switch status {
 			case dnsRouteStatusMissing:
@@ -1116,6 +1139,10 @@ type dnsExchangeContext struct {
 }
 
 func (r *Router) prepareExchange(ctx context.Context, message *mDNS.Msg) (*dnsExchangeContext, *mDNS.Msg, error) {
+	ctx = adapter.CaptureDNSQueryInfo(ctx)
+	if adapter.DNSQueryTraceFromContext(ctx) == nil {
+		ctx, _ = adapter.ContextWithDNSQueryTrace(ctx)
+	}
 	if r.powerManager != nil {
 		recorder := r.powerManager.Recorder()
 		if recorder != nil {
@@ -1261,17 +1288,23 @@ func echPublicName(record *mDNS.HTTPS) string {
 	return ""
 }
 
-func (r *Router) exchangeLegacy(ctx context.Context, exchangeCtx *dnsExchangeContext, message *mDNS.Msg, options adapter.DNSQueryOptions) (*mDNS.Msg, adapter.DNSTransport, error) {
+func (r *Router) exchangeLegacy(ctx context.Context, exchangeCtx *dnsExchangeContext, message *mDNS.Msg, options adapter.DNSQueryOptions) (result *mDNS.Msg, selected adapter.DNSTransport, resultErr error) {
 	var (
 		transport adapter.DNSTransport
 		rule      adapter.DNSRule
 		ruleIndex int
 	)
+	defer func() {
+		if result != nil {
+			r.completeDNSRule(ctx, exchangeWithRulesResult{response: result, transport: selected}, dnsRuleDescription(ruleIndex, rule))
+		}
+	}()
 	ruleIndex = -1
 	for {
 		dnsCtx := adapter.OverrideContext(ctx)
 		dnsOptions := options
 		transport, rule, ruleIndex = r.matchDNS(ctx, exchangeCtx.rules, true, ruleIndex, isAddressQuery(message), &dnsOptions)
+		dnsOptions.DiagnosticRule = dnsRuleDescription(ruleIndex, rule)
 		if rule != nil {
 			switch action := rule.Action().(type) {
 			case *R.RuleActionReject:
@@ -1375,6 +1408,10 @@ func (r *Router) finishExchangeAsync(message *mDNS.Msg, transport adapter.DNSTra
 }
 
 func (r *Router) Lookup(ctx context.Context, domain string, options adapter.DNSQueryOptions) ([]netip.Addr, error) {
+	ctx = adapter.CaptureDNSQueryInfo(ctx)
+	if adapter.DNSQueryTraceFromContext(ctx) == nil {
+		ctx, _ = adapter.ContextWithDNSQueryTrace(ctx)
+	}
 	r.rulesAccess.RLock()
 	if r.closing {
 		r.rulesAccess.RUnlock()
@@ -1434,6 +1471,7 @@ func (r *Router) Lookup(ctx context.Context, domain string, options adapter.DNSQ
 			dnsCtx := adapter.OverrideContext(ctx)
 			dnsOptions := options
 			transport, rule, ruleIndex = r.matchDNS(ctx, rules, false, ruleIndex, true, &dnsOptions)
+			dnsOptions.DiagnosticRule = dnsRuleDescription(ruleIndex, rule)
 			if rule != nil {
 				switch action := rule.Action().(type) {
 				case *R.RuleActionReject:

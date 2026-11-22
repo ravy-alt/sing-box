@@ -134,6 +134,10 @@ func (h *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (n
 	}
 }
 
+func (h *Outbound) DialerNetwork(string) string {
+	return adapter.DialerNetworkFor(h.transport, N.NetworkTCP)
+}
+
 func (h *Outbound) MultiplexEnabled() bool {
 	if h.multiplexDialer != nil {
 		return true
