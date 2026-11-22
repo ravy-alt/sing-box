@@ -34,14 +34,15 @@ var _ adapter.SmartURLTestGroup = (*SmartURLTest)(nil)
 var errSmartMembersChanged = errors.New("smart-urltest: membership changed during test")
 
 type smartTestRound struct {
-	finalized    bool
-	published    int
-	snapshot     *groupmembers.Snapshot
-	partial      map[string]uint16
-	measurements map[string]urltest.Result
-	done         chan struct{}
-	result       map[string]uint16
-	err          error
+	finalized       bool
+	published       int
+	snapshot        *groupmembers.Snapshot
+	partial         map[string]uint16
+	measurements    map[string]urltest.Result
+	udpMeasurements map[string]urltest.UDPResult
+	done            chan struct{}
+	result          map[string]uint16
+	err             error
 }
 
 type SmartURLTest struct {
@@ -75,6 +76,15 @@ func NewSmartURLTest(ctx context.Context, router adapter.Router, logger log.Cont
 	if options.URL == "" {
 		options.URL = "https://www.gstatic.com/generate_204"
 	}
+	udpOptions := option.UDPTestOptions{}
+	if options.UDPTest != nil {
+		udpOptions = *options.UDPTest
+	}
+	udpOptions, udpErr := urltest.NormalizeUDPTest(udpOptions)
+	if udpErr != nil {
+		return nil, udpErr
+	}
+	options.UDPTest = &udpOptions
 	link, err := url.Parse(options.URL)
 	if err != nil || link.Hostname() == "" || (link.Scheme != "http" && link.Scheme != "https") {
 		return nil, errors.New("smart-urltest: url must be an absolute HTTP(S) URL")
@@ -194,11 +204,12 @@ func (s *SmartURLTest) ValidateImports(pending bool) error { return s.members.Va
 func (s *SmartURLTest) OptionalImportDependency(tag string) bool {
 	return s.members.OptionalImportDependency(tag)
 }
-func (s *SmartURLTest) ImportsSource(tag string) bool { return s.members.ImportsSource(tag) }
-func (s *SmartURLTest) All() []string                 { return slices.Clone(s.refresh().Tags) }
-func (s *SmartURLTest) DynamicSelection()             {}
-func (s *SmartURLTest) TestURL() string               { return s.options.URL }
-func (s *SmartURLTest) ClearCache()                   { s.cache.clear() }
+func (s *SmartURLTest) ImportsSource(tag string) bool         { return s.members.ImportsSource(tag) }
+func (s *SmartURLTest) All() []string                         { return slices.Clone(s.refresh().Tags) }
+func (s *SmartURLTest) DynamicSelection()                     {}
+func (s *SmartURLTest) TestURL() string                       { return s.options.URL }
+func (s *SmartURLTest) UDPTestOptions() option.UDPTestOptions { return *s.options.UDPTest }
+func (s *SmartURLTest) ClearCache()                           { s.cache.clear() }
 func (s *SmartURLTest) AttachConnection(conn io.Closer) func() {
 	return s.interruptGroup.Add(conn, true)
 }
@@ -244,34 +255,28 @@ func (s *SmartURLTest) ranked(network string) (*groupmembers.Snapshot, []adapter
 	snapshot := s.refresh()
 	// Resolve current leaves on every read. A child selector can switch without
 	// changing membership; cached delays under child group tags would be stale.
-	delays := make(map[string]uint16)
+	health := make(map[string]smartProbeHealth)
 	var candidates []adapter.Outbound
 	var tags []string
 	for _, outbound := range snapshot.Outbounds {
 		if slices.Contains(outbound.Network(), network) {
+			observation := s.probeHealth(outbound)
+			if observation.tcpFailed {
+				continue
+			}
 			candidates = append(candidates, outbound)
 			tags = append(tags, outbound.Tag())
-			if h := s.history.LoadOutboundHistory(outbound, s.options.URL); h != nil {
-				delays[outbound.Tag()] = h.Delay
-			}
+			health[outbound.Tag()] = observation
 		}
 	}
 	s.mu.Lock()
-	best := smartChooseBest(tags, delays, s.best[network], s.tolerance)
+	best := smartChooseHealthy(tags, health, s.best[network], s.tolerance)
 	if s.snapshot == snapshot {
 		s.best[network] = best
 	}
 	s.mu.Unlock()
 	slices.SortStableFunc(candidates, func(a, b adapter.Outbound) int {
-		da, oka := delays[a.Tag()]
-		db, okb := delays[b.Tag()]
-		if oka != okb {
-			if oka {
-				return -1
-			}
-			return 1
-		}
-		return int(da) - int(db)
+		return compareSmartHealth(health[a.Tag()], health[b.Tag()])
 	})
 	if best == "" && len(candidates) > 0 {
 		best = candidates[0].Tag()
@@ -361,7 +366,7 @@ func (s *SmartURLTest) startTest(automatic bool) (*smartTestRound, time.Duration
 		default:
 		}
 	}
-	round := &smartTestRound{done: make(chan struct{}), snapshot: snapshot, partial: make(map[string]uint16), measurements: make(map[string]urltest.Result)}
+	round := &smartTestRound{done: make(chan struct{}), snapshot: snapshot, partial: make(map[string]uint16), measurements: make(map[string]urltest.Result), udpMeasurements: make(map[string]urltest.UDPResult)}
 	s.round = round
 	s.lastTest = time.Now()
 	go s.runTest(snapshot, round)
@@ -415,6 +420,9 @@ func (s *SmartURLTest) publishTest(round *smartTestRound, results map[string]uin
 		for _, observation := range round.measurements {
 			observation.Store(s.history)
 		}
+		for _, observation := range round.udpMeasurements {
+			observation.Store(s.history)
+		}
 
 	})
 }
@@ -441,6 +449,7 @@ func (s *SmartURLTest) runTest(snapshot *groupmembers.Snapshot, round *smartTest
 	type measurement struct {
 		index  int
 		result urltest.Result
+		udp    urltest.UDPResult
 	}
 	completed := make(chan measurement, len(jobs))
 	var next atomic.Int64
@@ -454,7 +463,12 @@ func (s *SmartURLTest) runTest(snapshot *groupmembers.Snapshot, round *smartTest
 				if index >= len(jobs) || s.probeCtx.Err() != nil {
 					return
 				}
-				completed <- measurement{index, s.probe(jobs[index].outbound)}
+				result := s.probe(jobs[index].outbound)
+				var udp urltest.UDPResult
+				if result.Err == nil {
+					udp = urltest.UDPTestWithResult(s.probeCtx, *s.options.UDPTest, jobs[index].outbound)
+				}
+				completed <- measurement{index: index, result: result, udp: udp}
 			}
 		}()
 	}
@@ -464,6 +478,7 @@ func (s *SmartURLTest) runTest(snapshot *groupmembers.Snapshot, round *smartTest
 		s.mu.Lock()
 		for _, tag := range jobs[item.index].aliases {
 			round.measurements[tag] = item.result
+			round.udpMeasurements[tag] = item.udp
 			if item.result.Err == nil {
 				results[tag] = item.result.Delay
 				round.partial[tag] = item.result.Delay
@@ -486,28 +501,6 @@ func (s *SmartURLTest) runTest(snapshot *groupmembers.Snapshot, round *smartTest
 	s.round = nil
 	close(round.done)
 	s.mu.Unlock()
-}
-
-func smartChooseBest(tags []string, delays map[string]uint16, current string, tolerance uint16) string {
-	best := ""
-	for _, tag := range tags {
-		if delay, ok := delays[tag]; ok && (best == "" || delay < delays[best]) {
-			best = tag
-		}
-	}
-	if best == "" {
-		if slices.Contains(tags, current) {
-			return current
-		}
-		if len(tags) > 0 {
-			return tags[0]
-		}
-		return ""
-	}
-	if delay, ok := delays[current]; ok && slices.Contains(tags, current) && uint32(delay) <= uint32(delays[best])+uint32(tolerance) {
-		return current
-	}
-	return best
 }
 
 func (s *SmartURLTest) probe(outbound adapter.Outbound) urltest.Result {

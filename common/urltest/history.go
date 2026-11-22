@@ -21,11 +21,12 @@ func NormalizeURL(link string) string {
 type HistoryStorage struct {
 	access       sync.RWMutex
 	delayHistory map[string]map[string]adapter.URLTestHistory
+	udpHistory   map[string]map[string]adapter.UDPTestHistory
 	updateHooks  []*observable.Subscriber[struct{}]
 }
 
 func NewHistoryStorage() *HistoryStorage {
-	return &HistoryStorage{delayHistory: make(map[string]map[string]adapter.URLTestHistory)}
+	return &HistoryStorage{delayHistory: make(map[string]map[string]adapter.URLTestHistory), udpHistory: make(map[string]map[string]adapter.UDPTestHistory)}
 }
 
 // An omitted URL means the standard test URL, never the most recent other URL.
@@ -55,6 +56,7 @@ func (s *HistoryStorage) DeleteURLTestHistory(tag string, links ...string) {
 	defer s.access.Unlock()
 	if len(links) == 0 {
 		delete(s.delayHistory, tag)
+		delete(s.udpHistory, tag)
 	} else {
 		delete(s.delayHistory[tag], NormalizeURL(links[0]))
 		if len(s.delayHistory[tag]) == 0 {

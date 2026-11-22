@@ -29,6 +29,7 @@ func proxyRouter(server *Server, router adapter.Router) http.Handler {
 		r.Use(parseProxyName, findProxyByName(server))
 		r.Get("/", getProxy(server))
 		r.Get("/delay", getProxyDelay(server))
+		r.Get("/udp-delay", getProxyUDPDelay(server))
 		r.Put("/", updateProxy(server))
 	})
 	return r
@@ -81,6 +82,17 @@ func proxyInfo(server *Server, detour adapter.Outbound, links ...string) *badjso
 	}
 	info.Put("testUrl", urltest.OutboundTestURL(detour))
 	leaf := urltest.SelectedLeaf(detour)
+	udpOptions := urltest.OutboundUDPTestOptions(detour)
+	info.Put("udpTest", udpTestSettings(udpOptions))
+	udpHistory := make(map[string]adapter.UDPTestHistory)
+	if leaf != nil {
+		udpHistory = server.urlTestHistory.UDPHistories(leaf.Tag())
+		for key, h := range udpHistory {
+			h.Outbound = adapter.OutboundDisplayName(server.ctx, h.Outbound)
+			udpHistory[key] = h
+		}
+	}
+	info.Put("udpHistory", udpHistory)
 	var targets []string
 	if leaf != nil {
 		targets = server.urlTestHistory.URLs(leaf.Tag())

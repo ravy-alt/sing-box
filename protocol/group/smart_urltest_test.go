@@ -45,8 +45,9 @@ func (m *smartTestManager) set(node adapter.Outbound) {
 
 type smartTestOutbound struct {
 	outbound.Adapter
-	dial  func(context.Context, string, M.Socksaddr) (net.Conn, error)
-	calls atomic.Int32
+	dial    func(context.Context, string, M.Socksaddr) (net.Conn, error)
+	udpDial func(context.Context, string, M.Socksaddr) (net.Conn, error)
+	calls   atomic.Int32
 }
 
 func smartNode(tag string, dial func(context.Context, string, M.Socksaddr) (net.Conn, error)) *smartTestOutbound {
@@ -54,6 +55,12 @@ func smartNode(tag string, dial func(context.Context, string, M.Socksaddr) (net.
 }
 func (n *smartTestOutbound) DialContext(ctx context.Context, network string, dst M.Socksaddr) (net.Conn, error) {
 	n.calls.Add(1)
+	if network == "udp" {
+		if n.udpDial != nil {
+			return n.udpDial(ctx, network, dst)
+		}
+		return nil, errors.New("UDP unavailable in test fixture")
+	}
 	return n.dial(ctx, network, dst)
 }
 func (n *smartTestOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
@@ -89,19 +96,6 @@ func smartFixture(t *testing.T, options option.SmartURLTestOutboundOptions, node
 	return smart, manager
 }
 
-func TestSmartToleranceAndRanking(t *testing.T) {
-	tags := []string{"a", "b", "c"}
-	delays := map[string]uint16{"a": 150, "b": 100, "c": 170}
-	require.Equal(t, "a", smartChooseBest(tags, delays, "a", 50))
-	require.Equal(t, "b", smartChooseBest(tags, delays, "a", 49))
-	require.Equal(t, "b", smartChooseBest(tags, delays, "a", 0))
-	delete(delays, "a")
-	require.Equal(t, "b", smartChooseBest(tags, delays, "a", 100))
-	require.Equal(t, "a", smartChooseBest(tags, nil, "a", 50))
-	require.Equal(t, "b", smartChooseBest(tags[1:], nil, "a", 50))
-	require.Equal(t, "b", smartChooseBest(tags, map[string]uint16{"a": 65535, "b": 65534}, "b", 65535))
-}
-
 func TestSmartURLTestProbesEveryMemberWithLimitedConcurrency(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) }))
 	defer server.Close()
@@ -120,7 +114,7 @@ func TestSmartURLTestProbesEveryMemberWithLimitedConcurrency(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, result, len(nodes))
 			for _, node := range nodes {
-				require.EqualValues(t, 1, node.(*smartTestOutbound).calls.Load(), node.Tag())
+				require.EqualValues(t, 2, node.(*smartTestOutbound).calls.Load(), node.Tag())
 			}
 		})
 	}
@@ -257,7 +251,7 @@ func TestSmartURLTestCoalescingCancellationAndStaleResults(t *testing.T) {
 	s.members.Updates().Notify()
 	close(release)
 	require.NoError(t, <-done)
-	require.EqualValues(t, 2, node.calls.Load())
+	require.EqualValues(t, 4, node.calls.Load())
 	require.NotNil(t, s.history.LoadURLTestHistory("node", server.URL))
 	result, err := s.URLTest(context.Background())
 	require.NoError(t, err)

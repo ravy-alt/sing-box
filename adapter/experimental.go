@@ -12,6 +12,17 @@ import (
 	"github.com/sagernet/sing/service"
 )
 
+type UDPTestHistory struct {
+	Time     time.Time `json:"time"`
+	Delay    uint16    `json:"delay"`
+	Alive    bool      `json:"alive"`
+	Outbound string    `json:"outbound"`
+	Server   string    `json:"server"`
+	Port     uint16    `json:"port"`
+	Domain   string    `json:"domain"`
+	Timeout  int64     `json:"timeout"`
+}
+
 type URLTestHistory struct {
 	Time  time.Time `json:"time"`
 	Delay uint16    `json:"delay"`

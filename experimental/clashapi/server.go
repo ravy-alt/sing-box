@@ -379,5 +379,5 @@ func getLogs(ctx context.Context, logFactory log.ObservableFactory) func(w http.
 }
 
 func version(w http.ResponseWriter, r *http.Request) {
-	render.JSON(w, r, render.M{"version": "sing-box " + C.Version, "premium": true, "meta": true, "capabilities": []string{"dns-management-v1"}})
+	render.JSON(w, r, render.M{"version": "sing-box " + C.Version, "premium": true, "meta": true, "capabilities": []string{"dns-management-v1", "udp-probe-v1"}})
 }

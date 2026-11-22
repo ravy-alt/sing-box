@@ -63,6 +63,10 @@ func (s *SmartURLTest) connect(ctx context.Context, network string, destination 
 	if adapter.IsURLTest(ctx) {
 		cached = ""
 	}
+	if cached != "" && !s.usableAffinity(cached, candidates, best) {
+		s.cache.forget(key, cached, serial)
+		cached = ""
+	}
 	initial := candidates[0]
 	for _, tag := range []string{best, cached} {
 		for _, candidate := range candidates {
@@ -112,6 +116,29 @@ func (s *SmartURLTest) connect(ctx context.Context, network string, destination 
 	if len(alternatives) == 0 {
 		return result
 	}
+	// Race only peers in the same health tier. A TCP-only candidate must not
+	// beat a working UDP candidate merely because its dial returns sooner.
+	failures := []error{result.err}
+	for len(alternatives) > 0 {
+		tier := s.probeHealth(alternatives[0]).tier()
+		end := 1
+		for end < len(alternatives) && s.probeHealth(alternatives[end]).tier() == tier {
+			end++
+		}
+		next := s.raceFallback(ctx, alternatives[:end], dial)
+		if next.err == nil {
+			return finish(next)
+		}
+		failures = append(failures, next.err)
+		if ctx.Err() != nil || s.ctx.Err() != nil {
+			return next
+		}
+		alternatives = alternatives[end:]
+	}
+	return smartDialResult{smartAttemptResult: smartAttemptResult{err: errors.Join(failures...)}}
+}
+
+func (s *SmartURLTest) raceFallback(ctx context.Context, alternatives []adapter.Outbound, dial smartDialFunc) smartDialResult {
 	type indexedResult struct {
 		index  int
 		result smartDialResult
@@ -147,7 +174,7 @@ func (s *SmartURLTest) connect(ctx context.Context, network string, destination 
 			}
 		}()
 	}
-	failures := []error{result.err}
+	var failures []error
 	for range alternatives {
 		select {
 		case <-ctx.Done():
@@ -157,7 +184,7 @@ func (s *SmartURLTest) connect(ctx context.Context, network string, destination 
 		case next := <-results:
 			if next.result.err == nil {
 				winner = next.index
-				return finish(next.result)
+				return next.result
 			}
 			next.result.close()
 			s.recordFailure(ctx, next.result.err)

@@ -28,6 +28,7 @@ type SmartURLTestOutboundOptions struct {
 	Import             []GroupImport      `json:"import,omitempty"`
 	EmptyFallback      string             `json:"empty_fallback,omitempty" reference:"outbound"`
 	URL                string             `json:"url,omitempty"`
+	UDPTest            *UDPTestOptions    `json:"udp_test,omitempty"`
 	Interval           badoption.Duration `json:"interval,omitempty"`
 	Tolerance          *uint16            `json:"tolerance,omitempty"`
 	CacheTTL           badoption.Duration `json:"cache_ttl,omitempty"`
@@ -42,6 +43,14 @@ type SmartURLTestOutboundOptions struct {
 	MinTestInterval    badoption.Duration `json:"min_test_interval,omitempty"`
 	TestConcurrency    int                `json:"test_concurrency,omitempty"`
 	MaxConcurrentDials int                `json:"max_concurrent_dials,omitempty"`
+}
+
+// UDPTestOptions describes a real DNS exchange through the tested outbound.
+type UDPTestOptions struct {
+	Server     string             `json:"server,omitempty"`
+	ServerPort uint16             `json:"server_port,omitempty"`
+	Domain     string             `json:"domain,omitempty"`
+	Timeout    badoption.Duration `json:"timeout,omitempty"`
 }
 
 // GroupImport copies membership, retaining the original outbound identities.
