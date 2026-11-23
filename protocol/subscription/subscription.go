@@ -665,12 +665,9 @@ func (s *Subscription) publish(g *snapshot, content []byte, etag string, updated
 	s.current = g
 	s.importAliases = nil
 	if updates := service.PtrFromContext[adapter.GroupUpdates](s.ctx); updates != nil {
-		updates.Notify()
-	}
-	if old != nil && s.history != nil {
-		for _, tag := range old.members {
-			s.history.DeleteURLTestHistory(tag)
-		}
+		updates.NotifyWith(g.history.Publish)
+	} else {
+		g.history.Publish()
 	}
 	s.content, s.etag = slices.Clone(content), etag
 	s.status.Ready, s.status.LastError, s.status.UpdatedAt = true, "", updated

@@ -54,6 +54,7 @@ type snapshot struct {
 	timer          *time.Timer
 	connections    map[io.Closer]struct{}
 	resources      *resourceCache
+	history        *urltest.HistoryStorage
 }
 
 func (g *snapshot) acquire() bool {
@@ -427,7 +428,9 @@ func (s *Subscription) buildResources(buildCtx context.Context, content []byte, 
 	g.outbounds = outbounds
 	service.MustRegister[adapter.OutboundManager](ctx, outbounds)
 	service.MustRegister[adapter.CacheFile](ctx, nil)
-	service.MustRegisterPtr[urltest.HistoryStorage](ctx, urltest.NewHistoryStorage())
+	g.history = s.history.NewScope(s.Tag(), func(tag string) bool { return ownsMember(s.Tag(), tag) })
+	service.MustRegisterPtr(ctx, g.history)
+	g.scope.Add(g.history.Close)
 	privateRouter := &routerView{Router: s.router, ruleSets: make(map[string]adapter.RuleSet)}
 	service.MustRegister[adapter.Router](ctx, privateRouter)
 	service.MustRegister[adapter.DNSRuleSetUpdateValidator](ctx, nil)

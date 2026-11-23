@@ -260,7 +260,7 @@ func (s *SmartURLTest) ranked(network string) (*groupmembers.Snapshot, []adapter
 	var tags []string
 	for _, outbound := range snapshot.Outbounds {
 		if slices.Contains(outbound.Network(), network) {
-			observation := s.probeHealth(outbound)
+			observation := s.probeHealth(outbound, network)
 			if observation.tcpFailed {
 				continue
 			}
@@ -430,21 +430,56 @@ func (s *SmartURLTest) publishTest(round *smartTestRound, results map[string]uin
 func (s *SmartURLTest) runTest(snapshot *groupmembers.Snapshot, round *smartTestRound) {
 	type job struct {
 		outbound adapter.Outbound
-		aliases  []string
+		aliases  []string // TCP result names, separate from the probed leaf.
 	}
 	jobs := make([]job, 0, len(snapshot.Outbounds))
 	indices := make(map[string]int)
+	add := func(leaf adapter.Outbound) int {
+		if index, found := indices[leaf.Tag()]; found {
+			return index
+		}
+		index := len(jobs)
+		indices[leaf.Tag()] = index
+		jobs = append(jobs, job{outbound: leaf})
+		return index
+	}
+	// Panel/group delays still describe the TCP-selected leaf at this group's URL.
 	for _, outbound := range snapshot.Outbounds {
-		resolved, err := urltest.Resolve(outbound)
-		if err != nil {
-			continue
-		}
-		if index, found := indices[resolved.Tag()]; found {
+		if leaf, err := urltest.Resolve(outbound); err == nil {
+			index := add(leaf)
 			jobs[index].aliases = append(jobs[index].aliases, outbound.Tag())
-		} else {
-			indices[resolved.Tag()] = len(jobs)
-			jobs = append(jobs, job{resolved, []string{outbound.Tag()}})
 		}
+	}
+	// Probe every reachable candidate, including unselected nested members and
+	// UDP-only leaves. Do not confuse an HTTP test failure with UDP failure.
+	manager := service.FromContext[adapter.OutboundManager](s.ctx)
+	seen := make(map[string]bool)
+	var walk func(adapter.Outbound)
+	walk = func(outbound adapter.Outbound) {
+		if outbound == nil || seen[outbound.Tag()] {
+			return
+		}
+		seen[outbound.Tag()] = true
+		if group, ok := adapter.OutboundGroupFor(outbound); ok {
+			// Selected objects also cover private/test group implementations
+			// whose members are not directly addressable by this manager.
+			walk(group.Selected(N.NetworkTCP))
+			walk(group.Selected(N.NetworkUDP))
+			if manager != nil {
+				for _, tag := range group.All() {
+					if member, found := manager.Outbound(tag); found {
+						walk(member)
+					}
+				}
+			}
+			return
+		}
+		if slices.Contains(outbound.Network(), N.NetworkUDP) {
+			add(outbound)
+		}
+	}
+	for _, outbound := range snapshot.Outbounds {
+		walk(outbound)
 	}
 	type measurement struct {
 		index  int
@@ -463,9 +498,12 @@ func (s *SmartURLTest) runTest(snapshot *groupmembers.Snapshot, round *smartTest
 				if index >= len(jobs) || s.probeCtx.Err() != nil {
 					return
 				}
-				result := s.probe(jobs[index].outbound)
+				var result urltest.Result
+				if slices.Contains(jobs[index].outbound.Network(), N.NetworkTCP) {
+					result = s.probe(jobs[index].outbound)
+				}
 				var udp urltest.UDPResult
-				if result.Err == nil {
+				if slices.Contains(jobs[index].outbound.Network(), N.NetworkUDP) {
 					udp = urltest.UDPTestWithResult(s.probeCtx, *s.options.UDPTest, jobs[index].outbound)
 				}
 				completed <- measurement{index: index, result: result, udp: udp}
@@ -476,10 +514,11 @@ func (s *SmartURLTest) runTest(snapshot *groupmembers.Snapshot, round *smartTest
 	results := make(map[string]uint16)
 	for item := range completed {
 		s.mu.Lock()
+		leafTag := jobs[item.index].outbound.Tag()
+		round.measurements[leafTag] = item.result
+		round.udpMeasurements[leafTag] = item.udp
 		for _, tag := range jobs[item.index].aliases {
-			round.measurements[tag] = item.result
-			round.udpMeasurements[tag] = item.udp
-			if item.result.Err == nil {
+			if item.result.Outbound != "" && item.result.Err == nil {
 				results[tag] = item.result.Delay
 				round.partial[tag] = item.result.Delay
 			}
@@ -493,7 +532,7 @@ func (s *SmartURLTest) runTest(snapshot *groupmembers.Snapshot, round *smartTest
 	} else if s.probeCtx.Err() != nil {
 		round.err = net.ErrClosed
 	} else if len(results) == 0 {
-		round.err = errors.New("smart-urltest: all probes failed")
+		round.err = errors.New("smart-urltest: all TCP probes failed")
 	} else {
 		round.result = results
 	}

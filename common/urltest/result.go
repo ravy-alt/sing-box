@@ -35,6 +35,12 @@ func (r Result) Store(history *HistoryStorage) {
 // testing. A latency/capability test of C must not silently succeed through a
 // business-traffic fallback D and attribute D's result to C.
 func Resolve(outbound adapter.Outbound) (adapter.Outbound, error) {
+	return ResolveNetwork(outbound, N.NetworkTCP)
+}
+
+// ResolveNetwork pins the selection for the payload network. Callers measuring
+// TCP latency keep using Resolve; UDP routing must follow the UDP selection.
+func ResolveNetwork(outbound adapter.Outbound, network string) (adapter.Outbound, error) {
 	seen := make(map[string]bool)
 	for outbound != nil {
 		if seen[outbound.Tag()] {
@@ -45,7 +51,7 @@ func Resolve(outbound adapter.Outbound) (adapter.Outbound, error) {
 		if !ok {
 			return outbound, nil
 		}
-		outbound = group.Selected(N.NetworkTCP)
+		outbound = group.Selected(network)
 	}
 	return nil, errors.New("URL test group has no selected outbound")
 }
@@ -62,16 +68,8 @@ func OutboundTestURL(outbound adapter.Outbound) string {
 // Queries follow the current selected chain, including dynamic groups. They
 // never read a stored group alias that could outlive a selection change.
 func SelectedLeaf(outbound adapter.Outbound) adapter.Outbound {
-	seen := make(map[string]bool)
-	for outbound != nil && !seen[outbound.Tag()] {
-		seen[outbound.Tag()] = true
-		group, ok := adapter.OutboundGroupFor(outbound)
-		if !ok {
-			return outbound
-		}
-		outbound = group.Selected(N.NetworkTCP)
-	}
-	return nil
+	leaf, _ := Resolve(outbound)
+	return leaf
 }
 
 func (s *HistoryStorage) LoadOutboundHistory(outbound adapter.Outbound, link string) *adapter.URLTestHistory {

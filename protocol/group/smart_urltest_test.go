@@ -295,11 +295,11 @@ func TestSmartAutomaticCooldownAndProbeFailureIsolation(t *testing.T) {
 	s, _ := smartFixture(t, option.SmartURLTestOutboundOptions{MinTestInterval: badoption.Duration(100 * time.Millisecond), Interval: badoption.Duration(time.Hour)}, node)
 	go s.schedule()
 	s.requestTest()
-	require.Eventually(t, func() bool { return node.calls.Load() > 0 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { timesMu.Lock(); defer timesMu.Unlock(); return len(times) > 0 }, time.Second, time.Millisecond)
 	for range 100 {
 		s.requestTest()
 	}
-	require.Eventually(t, func() bool { return node.calls.Load() > 1 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { timesMu.Lock(); defer timesMu.Unlock(); return len(times) > 1 }, time.Second, time.Millisecond)
 	s.stopProbes()
 	timesMu.Lock()
 	recorded := slices.Clone(times)

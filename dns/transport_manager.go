@@ -11,6 +11,7 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing/common"
 	E "github.com/sagernet/sing/common/exceptions"
+	"github.com/sagernet/sing/service"
 )
 
 var _ adapter.DNSTransportManager = (*TransportManager)(nil)
@@ -159,6 +160,19 @@ func (m *TransportManager) Create(ctx context.Context, logger log.ContextLogger,
 	transport, err := m.registry.CreateDNSTransport(ctx, logger, tag, transportType, options)
 	if err != nil {
 		return err
+	}
+	// Pools reached through an outbound may retain a retired subscription node.
+	// Membership changes conservatively invalidate detoured remote DNS pools;
+	// direct transports and cached DNS answers remain unaffected.
+	if updates := service.PtrFromContext[adapter.GroupUpdates](ctx); updates != nil {
+		switch transportType {
+		case C.DNSTypeUDP, C.DNSTypeTCP, C.DNSTypeTLS, C.DNSTypeHTTPS, C.DNSTypeQUIC, C.DNSTypeHTTP3:
+			if referrer, ok := transport.(adapter.Referrer); ok && len(referrer.References()) > 0 {
+				transport = newGenerationTransport(ctx, logger, updates, transport, func() (adapter.DNSTransport, error) {
+					return m.registry.CreateDNSTransport(ctx, logger, tag, transportType, options)
+				})
+			}
+		}
 	}
 	m.access.Lock()
 	defer m.access.Unlock()

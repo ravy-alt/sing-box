@@ -20,7 +20,16 @@ func (u *GroupUpdates) State() (uint64, <-chan struct{}) {
 }
 
 func (u *GroupUpdates) Notify() {
+	u.NotifyWith(nil)
+}
+
+// NotifyWith publishes ancillary state under the same revision barrier used
+// by probe commits. The callback must not call providers or groups.
+func (u *GroupUpdates) NotifyWith(publish func()) {
 	u.mu.Lock()
+	if publish != nil {
+		publish()
+	}
 	u.revision++
 	close(u.changed)
 	u.changed = make(chan struct{})

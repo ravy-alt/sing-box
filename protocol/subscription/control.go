@@ -7,6 +7,8 @@ import (
 	"net/netip"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/urltest"
+	"github.com/sagernet/sing-box/option"
 	E "github.com/sagernet/sing/common/exceptions"
 )
 
@@ -121,6 +123,14 @@ func (g *managedGroup) TestURL() (link string) {
 type managedSmartURLTest struct{ *managedURLTest }
 
 func (g *managedSmartURLTest) DynamicSelection() {}
+func (g *managedSmartURLTest) UDPTestOptions() option.UDPTestOptions {
+	options, _ := urltest.NormalizeUDPTest(option.UDPTestOptions{})
+	_ = g.control(func(outbound adapter.Outbound) error {
+		options = urltest.OutboundUDPTestOptions(outbound)
+		return nil
+	})
+	return options
+}
 func (g *managedSmartURLTest) TestURL() (link string) {
 	_ = g.control(func(outbound adapter.Outbound) error {
 		if smart, ok := outbound.(adapter.SmartURLTestGroup); ok {

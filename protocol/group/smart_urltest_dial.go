@@ -63,7 +63,7 @@ func (s *SmartURLTest) connect(ctx context.Context, network string, destination 
 	if adapter.IsURLTest(ctx) {
 		cached = ""
 	}
-	if cached != "" && !s.usableAffinity(cached, candidates, best) {
+	if cached != "" && !s.usableAffinity(network, cached, candidates, best) {
 		s.cache.forget(key, cached, serial)
 		cached = ""
 	}
@@ -120,9 +120,9 @@ func (s *SmartURLTest) connect(ctx context.Context, network string, destination 
 	// beat a working UDP candidate merely because its dial returns sooner.
 	failures := []error{result.err}
 	for len(alternatives) > 0 {
-		tier := s.probeHealth(alternatives[0]).tier()
+		tier := s.probeHealth(alternatives[0], network).tier()
 		end := 1
-		for end < len(alternatives) && s.probeHealth(alternatives[end]).tier() == tier {
+		for end < len(alternatives) && s.probeHealth(alternatives[end], network).tier() == tier {
 			end++
 		}
 		next := s.raceFallback(ctx, alternatives[:end], dial)

@@ -21,7 +21,7 @@ func AddIPNode(options any, tag string, graph map[string][]string) {
 				graph[ip] = append(graph[ip], edge)
 			}
 		}
-	case *option.SelectorOutboundOptions, *option.URLTestOutboundOptions, *option.SubscriptionOutboundOptions:
+	case *option.SelectorOutboundOptions, *option.URLTestOutboundOptions, *option.SmartURLTestOutboundOptions, *option.SubscriptionOutboundOptions:
 		AddIPGroup(tag, graph)
 	default:
 		graph[ip] = []string{node}

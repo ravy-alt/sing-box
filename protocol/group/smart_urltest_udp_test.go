@@ -86,14 +86,14 @@ func TestSmartFailedTCPExcludedAndNewMembersRemainProbeable(t *testing.T) {
 	s, _ := smartFixture(t, option.SmartURLTestOutboundOptions{}, node)
 	recordSmartProbe(s, "dead", 0, 20)
 	require.Nil(t, s.Selected("tcp"))
-	require.Nil(t, s.Selected("udp"))
+	require.Equal(t, node, s.Selected("udp"), "a failed HTTP probe must not discard a successful UDP probe")
 	_, err := s.DialContext(context.Background(), "tcp", M.ParseSocksaddr("example.com:443"))
 	require.Error(t, err)
 	require.Zero(t, node.calls.Load())
 	// Periodic probes iterate membership, not the filtered live candidates.
 	_, err = s.URLTest(context.Background())
 	require.Error(t, err)
-	require.EqualValues(t, 1, node.calls.Load())
+	require.EqualValues(t, 2, node.calls.Load(), "both TCP and UDP must be probed after a TCP failure")
 }
 
 func TestSmartFallbackKeepsHealthPriority(t *testing.T) {
@@ -173,13 +173,13 @@ func TestSmartAutomaticRoundProbesNestedLeafAndOwnUDPProfile(t *testing.T) {
 	for _, tag := range []string{"smart", "b", "c"} {
 		require.Empty(t, s.history.UDPHistories(tag))
 	}
-	require.Equal(t, 0, s.probeHealth(b).tier())
+	require.Equal(t, 0, s.probeHealth(b, "tcp").tier())
 	otherProfile := *s.options.UDPTest
 	otherProfile.Domain = "child.example."
 	urltest.UDPResult{Options: otherProfile, Started: time.Now(), Outbound: "leaf", Err: errors.New("child failed")}.Store(s.history)
-	require.Equal(t, 0, s.probeHealth(b).tier(), "another group's profile cannot poison this group")
+	require.Equal(t, 0, s.probeHealth(b, "tcp").tier(), "another group's profile cannot poison this group")
 	other := smartNode("replacement", nil)
 	s.history.StoreURLTestHistory(other.Tag(), &adapter.URLTestHistory{URL: s.TestURL(), Time: time.Now(), Delay: 1})
 	c.selected = other
-	require.Equal(t, 1, s.probeHealth(b).tier(), "nested selection must not inherit the old leaf's UDP success")
+	require.Equal(t, 1, s.probeHealth(b, "tcp").tier(), "nested selection must not inherit the old leaf's UDP success")
 }

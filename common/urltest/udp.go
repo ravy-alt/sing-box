@@ -190,13 +190,17 @@ func exchangeUDP(ctx context.Context, options option.UDPTestOptions, outbound ad
 func (s *HistoryStorage) storeUDPHistory(tag, key string, h adapter.UDPTestHistory) {
 	s.access.Lock()
 	defer s.access.Unlock()
-	if s.udpHistory == nil {
-		s.udpHistory = make(map[string]map[string]adapter.UDPTestHistory)
+	if s.closed {
+		return
 	}
-	bucket := s.udpHistory[tag]
+	target := s.targetLocked(tag, true)
+	if target.udpHistory == nil {
+		target.udpHistory = make(map[string]map[string]adapter.UDPTestHistory)
+	}
+	bucket := target.udpHistory[tag]
 	if bucket == nil {
 		bucket = make(map[string]adapter.UDPTestHistory)
-		s.udpHistory[tag] = bucket
+		target.udpHistory[tag] = bucket
 	}
 	if previous, ok := bucket[key]; ok {
 		if h.Time.Before(previous.Time) {
@@ -221,7 +225,7 @@ func (s *HistoryStorage) LoadUDPHistory(tag string, options option.UDPTestOption
 	}
 	s.access.RLock()
 	defer s.access.RUnlock()
-	h, ok := s.udpHistory[tag][UDPTestKey(options)]
+	h, ok := s.targetLocked(tag, false).udpHistory[tag][UDPTestKey(options)]
 	if !ok {
 		return nil
 	}
@@ -235,7 +239,7 @@ func (s *HistoryStorage) UDPHistories(tag string) map[string]adapter.UDPTestHist
 	}
 	s.access.RLock()
 	defer s.access.RUnlock()
-	for key, h := range s.udpHistory[tag] {
+	for key, h := range s.targetLocked(tag, false).udpHistory[tag] {
 		result[key] = h
 	}
 	return result
@@ -249,7 +253,7 @@ func (s *HistoryStorage) LoadURLTestObservation(tag, link string) *adapter.URLTe
 	}
 	s.access.RLock()
 	defer s.access.RUnlock()
-	h, ok := s.delayHistory[tag][NormalizeURL(link)]
+	h, ok := s.targetLocked(tag, false).delayHistory[tag][NormalizeURL(link)]
 	if !ok {
 		return nil
 	}
