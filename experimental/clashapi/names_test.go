@@ -25,9 +25,10 @@ type namedTestOutbound struct {
 	name string
 }
 
-func (o *namedTestOutbound) Tag() string       { return o.name }
-func (o *namedTestOutbound) Type() string      { return "socks" }
-func (o *namedTestOutbound) Network() []string { return []string{"tcp", "udp"} }
+func (o *namedTestOutbound) Tag() string            { return o.name }
+func (o *namedTestOutbound) Type() string           { return "socks" }
+func (o *namedTestOutbound) Network() []string      { return []string{"tcp", "udp"} }
+func (o *namedTestOutbound) Dependencies() []string { return nil }
 
 func TestProxyPublicNameRoundTrip(t *testing.T) {
 	ctx := service.ContextWithDefaultRegistry(context.Background())

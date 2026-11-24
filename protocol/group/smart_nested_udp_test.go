@@ -1,20 +1,25 @@
 package group
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/miekg/dns"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/common/urltest"
+	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badoption"
 	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,6 +51,66 @@ type candidateTestGroup struct {
 }
 
 func (g *candidateTestGroup) All() []string { return g.members }
+
+func TestSmartLogsUnselectedUDPDisabledMembers(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) }))
+	t.Cleanup(target.Close)
+	selected := smartNode("selected", func(ctx context.Context, network string, dst M.Socksaddr) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, dst.String())
+	})
+	disabled := smartNode("disabled", nil)
+	disabled.Adapter = outbound.NewAdapter("test", "disabled", []string{"tcp"}, nil)
+	inner := &candidateTestGroup{&splitNetworkGroup{&historyTestGroup{smartNode("inner", nil), selected, target.URL}, selected}, []string{"selected", "disabled"}}
+	s, manager := smartFixture(t, option.SmartURLTestOutboundOptions{URL: target.URL, TestConcurrency: 1}, inner)
+	manager.set(selected)
+	manager.set(disabled)
+	var output bytes.Buffer
+	factory, err := log.New(log.Options{Context: s.ctx, Options: option.LogOptions{Level: "debug", DisableColor: true}, DefaultWriter: &output})
+	require.NoError(t, err)
+	require.NoError(t, factory.Start())
+	t.Cleanup(func() { factory.Close() })
+	service.MustRegister[log.Factory](s.ctx, factory)
+	_, err = s.URLTest(context.Background())
+	require.NoError(t, err)
+	require.Zero(t, disabled.calls.Load())
+	require.Empty(t, s.history.UDPHistories("disabled"))
+	require.Nil(t, s.history.LoadURLTestObservation("disabled", target.URL), "logging a UDP skip must not add a TCP test")
+	require.Equal(t, 1, strings.Count(output.String(), "UDP test [disabled] skipped:"))
+}
+
+func TestSmartAutomaticRoundSkipsDisabledUDPAndPreservesTCP(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) }))
+	t.Cleanup(server.Close)
+	leaf := smartNode("tcp-only", func(ctx context.Context, network string, dst M.Socksaddr) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, dst.String())
+	})
+	leaf.Adapter = outbound.NewAdapter("test", "tcp-only", []string{"tcp"}, nil)
+	inner := &historyTestGroup{smartNode("inner", nil), leaf, server.URL}
+	outer := &historyTestGroup{smartNode("outer", nil), inner, server.URL}
+	s, _ := smartFixture(t, option.SmartURLTestOutboundOptions{URL: server.URL}, outer, inner, leaf)
+	var output bytes.Buffer
+	factory, err := log.New(log.Options{Context: s.ctx, Options: option.LogOptions{Level: "debug", DisableColor: true}, DefaultWriter: &output})
+	require.NoError(t, err)
+	require.NoError(t, factory.Start())
+	t.Cleanup(func() { factory.Close() })
+	service.MustRegister[log.Factory](s.ctx, factory)
+	for round := range 2 {
+		if round == 1 {
+			urltest.UDPResult{Options: *s.options.UDPTest, Started: time.Now().Add(-time.Minute), Outbound: leaf.Tag(), Delay: 12}.Store(s.history)
+		}
+		before := s.history.UDPHistories(leaf.Tag())
+		result, err := s.URLTest(context.Background())
+		require.NoError(t, err)
+		require.Len(t, result, 3)
+		require.Positive(t, result["outer"])
+		require.Equal(t, result["outer"], result[leaf.Tag()])
+		require.EqualValues(t, round+1, leaf.calls.Load(), "only the deduplicated TCP probe may dial")
+		require.Equal(t, before, s.history.UDPHistories(leaf.Tag()))
+		require.Contains(t, output.String(), "UDP test [tcp-only] skipped: UDP forwarding is disabled or unsupported")
+		require.Empty(t, s.history.UDPHistories("outer"))
+		require.Empty(t, s.history.UDPHistories("inner"))
+	}
+}
 
 func TestSmartProbesAllNestedUDPCandidatesAfterTCPFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) }))

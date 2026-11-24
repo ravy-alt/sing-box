@@ -8,14 +8,20 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badoption"
 	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
 )
+
+var ErrUDPTestUnsupported = errors.New("UDP forwarding is disabled or unsupported")
 
 func NormalizeUDPTest(options option.UDPTestOptions) (option.UDPTestOptions, error) {
 	options.Server = strings.ToLower(strings.TrimSpace(options.Server))
@@ -70,7 +76,7 @@ type UDPResult struct {
 }
 
 func (r UDPResult) Store(history *HistoryStorage) {
-	if history == nil || r.Outbound == "" || errors.Is(r.Err, context.Canceled) {
+	if history == nil || r.Outbound == "" || errors.Is(r.Err, context.Canceled) || errors.Is(r.Err, ErrUDPTestUnsupported) {
 		return
 	}
 	h := adapter.UDPTestHistory{Time: r.Started, Delay: r.Delay, Alive: r.Err == nil && r.Delay > 0, Outbound: r.Outbound, Server: r.Options.Server, Port: r.Options.ServerPort, Domain: r.Options.Domain, Timeout: time.Duration(r.Options.Timeout).Milliseconds()}
@@ -84,8 +90,9 @@ func (r UDPResult) Store(history *HistoryStorage) {
 // underlying dial. Its slot is retained until the operation actually exits.
 var udpProbeSlots = make(chan struct{}, 256)
 
-func UDPTestWithResult(parent context.Context, options option.UDPTestOptions, outbound adapter.Outbound) UDPResult {
-	r := UDPResult{Options: options, Started: time.Now()}
+func UDPTestWithResult(parent context.Context, options option.UDPTestOptions, outbound adapter.Outbound) (r UDPResult) {
+	r = UDPResult{Options: options, Started: time.Now()}
+	defer func() { logUDPTestResult(parent, outbound, r) }()
 	var err error
 	r.Options, err = NormalizeUDPTest(options)
 	if err != nil {
@@ -97,6 +104,11 @@ func UDPTestWithResult(parent context.Context, options option.UDPTestOptions, ou
 	leaf, err := Resolve(outbound)
 	if err != nil {
 		r.Err = err
+		return r
+	}
+	// Check every hop using its actual transport network before reserving
+	// capacity. A UDP payload may reach its relay over TCP (UoT, AnyTLS, mux).
+	if !r.checkNetwork(ctx, leaf) {
 		return r
 	}
 	select {
@@ -113,9 +125,14 @@ func UDPTestWithResult(parent context.Context, options option.UDPTestOptions, ou
 	r.Started = time.Now()
 	r.Outbound = leaf.Tag()
 	done := make(chan UDPResult, 1)
+	var dialStarted atomic.Bool
 	go func(result UDPResult) {
 		defer func() { <-udpProbeSlots }()
-		result.Delay, result.Err = exchangeUDP(ctx, result.Options, leaf)
+		// Selection or subscription capability may have changed while queued.
+		if result.checkNetwork(ctx, leaf) {
+			dialStarted.Store(true)
+			result.Delay, result.Err = exchangeUDP(ctx, result.Options, leaf)
+		}
 		done <- result
 	}(r)
 	select {
@@ -126,7 +143,51 @@ func UDPTestWithResult(parent context.Context, options option.UDPTestOptions, ou
 	case <-ctx.Done():
 	}
 	r.Err = ctx.Err()
+	if !dialStarted.Load() {
+		r.Outbound = "" // Timing out in validation is not a failed node probe.
+	}
 	return r
+}
+
+func (r *UDPResult) checkNetwork(ctx context.Context, outbound adapter.Outbound) bool {
+	err := adapter.CheckOutboundDialerNetwork(ctx, outbound, service.FromContext[adapter.OutboundManager](ctx), N.NetworkUDP)
+	if err == nil {
+		return true
+	}
+	r.Err = err
+	r.Outbound = ""
+	if errors.Is(err, adapter.ErrOutboundNetworkUnsupported) {
+		r.Err = fmt.Errorf("%w: %w", ErrUDPTestUnsupported, err)
+		r.Outbound = outbound.Tag()
+	}
+	return false
+}
+
+func logUDPTestResult(ctx context.Context, outbound adapter.Outbound, result UDPResult) {
+	factory := service.FromContext[log.Factory](ctx)
+	if factory == nil {
+		return
+	}
+	name := result.Outbound
+	if name == "" && outbound != nil {
+		name = outbound.Tag()
+	}
+	name = adapter.OutboundDisplayName(ctx, name)
+	logger := factory.NewLogger("urltest")
+	target := net.JoinHostPort(result.Options.Server, strconv.Itoa(int(result.Options.ServerPort)))
+	details := " (server=" + target + ", domain=" + result.Options.Domain + ")"
+	switch {
+	case errors.Is(result.Err, ErrUDPTestUnsupported):
+		logger.DebugContext(ctx, "UDP test [", name, "] skipped: ", result.Err, details)
+	case errors.Is(result.Err, context.Canceled):
+		logger.DebugContext(ctx, "UDP test [", name, "] cancelled", details)
+	case result.Outbound == "":
+		logger.DebugContext(ctx, "UDP test [", name, "] skipped: ", result.Err, details)
+	case result.Err != nil:
+		logger.DebugContext(ctx, "UDP test [", name, "] failed: ", result.Err, details)
+	default:
+		logger.DebugContext(ctx, "UDP test [", name, "] succeeded: ", result.Delay, "ms", details)
+	}
 }
 
 func exchangeUDP(ctx context.Context, options option.UDPTestOptions, outbound adapter.Outbound) (uint16, error) {

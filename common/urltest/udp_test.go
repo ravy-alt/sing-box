@@ -1,19 +1,23 @@
 package urltest
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/miekg/dns"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badoption"
 	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,9 +33,103 @@ func (n *udpProbeNode) ListenPacket(context.Context, M.Socksaddr) (net.PacketCon
 	return nil, errors.New("unexpected packet dial")
 }
 
+func udpProbeLogContext(t *testing.T, level string) (context.Context, *bytes.Buffer) {
+	t.Helper()
+	ctx := service.ContextWithDefaultRegistry(context.Background())
+	output := new(bytes.Buffer)
+	factory, err := log.New(log.Options{Context: ctx, Options: option.LogOptions{Level: level, DisableColor: true}, DefaultWriter: output})
+	require.NoError(t, err)
+	require.NoError(t, factory.Start())
+	t.Cleanup(func() { factory.Close() })
+	service.MustRegister[log.Factory](ctx, factory)
+	return ctx, output
+}
+
+func TestUDPProbeDisabledDoesNotDialOrChangeHistory(t *testing.T) {
+	for _, level := range []string{"debug", "info"} {
+		t.Run(level, func(t *testing.T) {
+			ctx, output := udpProbeLogContext(t, level)
+			var calls atomic.Int32
+			node := &udpProbeNode{Adapter: outbound.NewAdapter("test", "tcp-only", []string{"tcp"}, nil), dial: func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+				calls.Add(1)
+				return nil, errors.New("must not dial")
+			}}
+			options, err := NormalizeUDPTest(option.UDPTestOptions{})
+			require.NoError(t, err)
+			history := NewHistoryStorage()
+			result := UDPTestWithResult(ctx, options, node)
+			require.ErrorIs(t, result.Err, ErrUDPTestUnsupported)
+			require.Equal(t, "tcp-only", result.Outbound)
+			require.Zero(t, calls.Load())
+			result.Store(history)
+			require.Empty(t, history.UDPHistories(node.Tag()), "a skip must not create a failed observation")
+			UDPResult{Options: options, Started: time.Now().Add(-time.Minute), Outbound: node.Tag(), Delay: 12}.Store(history)
+			before := history.LoadUDPHistory(node.Tag(), options)
+			result.Store(history)
+			require.Equal(t, before, history.LoadUDPHistory(node.Tag(), options), "a skip must preserve existing observations")
+			if level == "debug" {
+				require.Contains(t, output.String(), "DEBUG")
+				require.Contains(t, output.String(), "UDP test [tcp-only] skipped: UDP forwarding is disabled or unsupported")
+				require.Contains(t, output.String(), "server=8.8.8.8:53, domain=example.com.")
+			} else {
+				require.Empty(t, output.String(), "skip logs must not appear at Info level")
+			}
+		})
+	}
+}
+
+type changingUDPProbe struct {
+	*udpProbeNode
+	network func() []string
+}
+
+func (n *changingUDPProbe) Network() []string { return n.network() }
+
+func TestUDPProbeRechecksCapabilityBeforeDial(t *testing.T) {
+	for _, slow := range []bool{false, true} {
+		t.Run(map[bool]string{false: "disabled", true: "validation timeout"}[slow], func(t *testing.T) {
+			var checks, dials atomic.Int32
+			release := make(chan struct{})
+			defer close(release)
+			node := &changingUDPProbe{
+				udpProbeNode: &udpProbeNode{Adapter: outbound.NewAdapter("test", "leaf", nil, nil), dial: func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+					dials.Add(1)
+					return nil, errors.New("must not dial")
+				}},
+				network: func() []string {
+					if checks.Add(1) == 1 {
+						return []string{"tcp", "udp"}
+					}
+					if slow {
+						<-release
+					}
+					return []string{"tcp"}
+				},
+			}
+			options, err := NormalizeUDPTest(option.UDPTestOptions{Timeout: badoption.Duration(50 * time.Millisecond)})
+			require.NoError(t, err)
+			result := UDPTestWithResult(context.Background(), options, node)
+			if slow {
+				require.ErrorIs(t, result.Err, context.DeadlineExceeded)
+				require.Empty(t, result.Outbound)
+			} else {
+				require.ErrorIs(t, result.Err, ErrUDPTestUnsupported)
+			}
+			require.EqualValues(t, 2, checks.Load())
+			require.Zero(t, dials.Load())
+			history := NewHistoryStorage()
+			UDPResult{Options: options, Started: time.Now().Add(-time.Minute), Outbound: "leaf", Delay: 12}.Store(history)
+			before := history.UDPHistories("leaf")
+			result.Store(history)
+			require.Equal(t, before, history.UDPHistories("leaf"))
+		})
+	}
+}
+
 func TestUDPProbeValidatesDNSAndNeverFallsBackToTCP(t *testing.T) {
 	for _, mode := range []string{"answer", "wrong-id-then-answer", "wrong-question", "truncated", "nxdomain", "empty", "timeout"} {
 		t.Run(mode, func(t *testing.T) {
+			ctx, output := udpProbeLogContext(t, "debug")
 			listener, err := net.ListenPacket("udp", "127.0.0.1:0")
 			require.NoError(t, err)
 			defer listener.Close()
@@ -74,15 +172,19 @@ func TestUDPProbeValidatesDNSAndNeverFallsBackToTCP(t *testing.T) {
 				return (&net.Dialer{}).DialContext(ctx, network, dst.String())
 			}}
 			options := option.UDPTestOptions{Server: "127.0.0.1", ServerPort: uint16(listener.LocalAddr().(*net.UDPAddr).Port), Domain: "example.com", Timeout: badoption.Duration(80 * time.Millisecond)}
-			result := UDPTestWithResult(context.Background(), options, node)
+			result := UDPTestWithResult(ctx, options, node)
 			if mode == "answer" || mode == "wrong-id-then-answer" {
 				require.NoError(t, result.Err)
 				require.Positive(t, result.Delay)
+				require.Contains(t, output.String(), "UDP test [leaf] succeeded:")
 			} else {
 				require.Error(t, result.Err)
 				require.Zero(t, result.Delay)
+				require.Contains(t, output.String(), "UDP test [leaf] failed:")
 			}
 			require.Equal(t, "leaf", result.Outbound)
+			require.Contains(t, output.String(), "DEBUG")
+			require.Contains(t, output.String(), "server="+listener.LocalAddr().String()+", domain=example.com.")
 		})
 	}
 }

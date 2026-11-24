@@ -431,22 +431,24 @@ func (s *SmartURLTest) runTest(snapshot *groupmembers.Snapshot, round *smartTest
 	type job struct {
 		outbound adapter.Outbound
 		aliases  []string // TCP result names, separate from the probed leaf.
+		testTCP  bool
 	}
 	jobs := make([]job, 0, len(snapshot.Outbounds))
 	indices := make(map[string]int)
-	add := func(leaf adapter.Outbound) int {
+	add := func(leaf adapter.Outbound, testTCP bool) int {
 		if index, found := indices[leaf.Tag()]; found {
+			jobs[index].testTCP = jobs[index].testTCP || testTCP
 			return index
 		}
 		index := len(jobs)
 		indices[leaf.Tag()] = index
-		jobs = append(jobs, job{outbound: leaf})
+		jobs = append(jobs, job{outbound: leaf, testTCP: testTCP})
 		return index
 	}
 	// Panel/group delays still describe the TCP-selected leaf at this group's URL.
 	for _, outbound := range snapshot.Outbounds {
 		if leaf, err := urltest.Resolve(outbound); err == nil {
-			index := add(leaf)
+			index := add(leaf, true)
 			jobs[index].aliases = append(jobs[index].aliases, outbound.Tag())
 		}
 	}
@@ -474,9 +476,9 @@ func (s *SmartURLTest) runTest(snapshot *groupmembers.Snapshot, round *smartTest
 			}
 			return
 		}
-		if slices.Contains(outbound.Network(), N.NetworkUDP) {
-			add(outbound)
-		}
+		// Include disabled, unselected leaves for the shared UDP skip check and
+		// log, without expanding the existing TCP test candidate set.
+		add(outbound, slices.Contains(outbound.Network(), N.NetworkUDP))
 	}
 	for _, outbound := range snapshot.Outbounds {
 		walk(outbound)
@@ -499,13 +501,11 @@ func (s *SmartURLTest) runTest(snapshot *groupmembers.Snapshot, round *smartTest
 					return
 				}
 				var result urltest.Result
-				if slices.Contains(jobs[index].outbound.Network(), N.NetworkTCP) {
+				if jobs[index].testTCP && slices.Contains(jobs[index].outbound.Network(), N.NetworkTCP) {
 					result = s.probe(jobs[index].outbound)
 				}
-				var udp urltest.UDPResult
-				if slices.Contains(jobs[index].outbound.Network(), N.NetworkUDP) {
-					udp = urltest.UDPTestWithResult(s.probeCtx, *s.options.UDPTest, jobs[index].outbound)
-				}
+				// The shared probe checks capability and logs explicit skips.
+				udp := urltest.UDPTestWithResult(s.probeCtx, *s.options.UDPTest, jobs[index].outbound)
 				completed <- measurement{index: index, result: result, udp: udp}
 			}
 		}()

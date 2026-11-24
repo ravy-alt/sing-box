@@ -32,6 +32,7 @@ import (
 	"github.com/sagernet/sing-box/protocol/direct"
 	"github.com/sagernet/sing-box/protocol/group"
 	httpproxy "github.com/sagernet/sing-box/protocol/http"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing-box/protocol/subscription"
 	"github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
@@ -101,6 +102,7 @@ func startNamedSubscriptionBox(t *testing.T, config string) (*box.Box, *Server, 
 	ctx := service.ContextWithDefaultRegistry(context.Background())
 	outbounds := outbound.NewRegistry()
 	subscription.RegisterOutbound(outbounds)
+	shadowsocks.RegisterOutbound(outbounds)
 	group.RegisterSelector(outbounds)
 	group.RegisterURLTest(outbounds)
 	group.RegisterSmartURLTest(outbounds)

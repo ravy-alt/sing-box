@@ -2,6 +2,7 @@ package clashapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -79,6 +80,14 @@ func getProxyUDPDelay(server *Server) func(http.ResponseWriter, *http.Request) {
 			}
 		} else {
 			commit()
+		}
+		if errors.Is(measurement.Err, urltest.ErrUDPTestUnsupported) {
+			render.JSON(w, r, render.M{
+				"skipped":  true,
+				"reason":   "udp_not_supported",
+				"outbound": adapter.OutboundDisplayName(server.ctx, measurement.Outbound),
+			})
+			return
 		}
 		// Rank against current leaf histories, not a possibly stale group alias.
 		for _, outbound := range server.outbound.Outbounds() {
