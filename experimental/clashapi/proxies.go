@@ -85,8 +85,8 @@ func proxyInfo(server *Server, detour adapter.Outbound, links ...string) *badjso
 	udpOptions := urltest.OutboundUDPTestOptions(detour)
 	info.Put("udpTest", udpTestSettings(udpOptions))
 	udpHistory := make(map[string]adapter.UDPTestHistory)
-	if leaf != nil {
-		udpHistory = server.urlTestHistory.UDPHistories(leaf.Tag())
+	if udpLeaf, err := urltest.ResolveNetwork(detour, N.NetworkUDP); err == nil {
+		udpHistory = server.urlTestHistory.UDPHistories(udpLeaf.Tag())
 		for key, h := range udpHistory {
 			h.Outbound = adapter.OutboundDisplayName(server.ctx, h.Outbound)
 			udpHistory[key] = h

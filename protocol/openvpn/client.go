@@ -47,6 +47,7 @@ type ClientEndpoint struct {
 	cancelLoop     context.CancelFunc
 	dnsRouter      adapter.DNSRouter
 	outboundDialer N.Dialer
+	dialerNetworks []string
 	queryOptions   adapter.DNSQueryOptions
 	client         *ovpn.Client
 	device         ovpntransport.Device
@@ -97,6 +98,12 @@ func NewClientEndpoint(ctx context.Context, router adapter.Router, logger log.Co
 	clientOptions, err := clientEndpoint.buildClientOptions(options)
 	if err != nil {
 		return nil, err
+	}
+	for _, remote := range clientOptions.Transport.Remotes {
+		network := N.NetworkName(remote.Protocol)
+		if !slices.Contains(clientEndpoint.dialerNetworks, network) {
+			clientEndpoint.dialerNetworks = append(clientEndpoint.dialerNetworks, network)
+		}
 	}
 	clientEndpoint.state.Store(&clientState{localAddresses: clientOptions.Tunnel.LocalAddress})
 	outboundDialer, err := dialer.NewWithOptions(dialer.Options{
@@ -380,6 +387,22 @@ func buildClientRemoteOptions(options option.OpenVPNClientEndpointOptions) (stri
 		})
 	}
 	return protocol, remotes
+}
+
+func (c *ClientEndpoint) DialerNetwork(string) string {
+	if state := c.state.Load(); state != nil && state.tunnelInfo.Network != "" {
+		return N.NetworkName(state.tunnelInfo.Network)
+	}
+	if len(c.dialerNetworks) > 0 {
+		return c.dialerNetworks[0]
+	}
+	return N.NetworkUDP
+}
+
+func (c *ClientEndpoint) DialerNetworkAlternatives(string) []string {
+	// Remote failover may switch transports. A TCP remote can carry UDP
+	// payloads even when another configured remote uses native UDP.
+	return slices.Clone(c.dialerNetworks)
 }
 
 func buildClientDataChannelOptions(options option.OpenVPNClientEndpointOptions) ovpn.ClientDataChannelOptions {

@@ -28,19 +28,21 @@ func (s *Subscription) PerformUpdateCheck() {
 	}
 	s.mu.Unlock()
 	defer g.release()
-	result := make(map[string]uint16)
+	results := map[string]map[string]uint16{N.NetworkTCP: {}, N.NetworkUDP: {}}
 	networks := make(map[string][]string)
 	for _, tag := range members.Tags {
 		member, _ := g.outbounds.Outbound(tag)
 		networks[tag] = outboundNetworks(member, make(map[string]bool))
-		if h := s.history.LoadOutboundHistory(member, s.options.TestURL); h != nil && h.Delay > 0 {
-			result[tag] = h.Delay
+		for network, result := range results {
+			if h := s.history.LoadOutboundNetworkHistory(member, s.options.TestURL, network); h != nil && h.Delay > 0 {
+				result[tag] = h.Delay
+			}
 		}
 	}
 	s.mu.Lock()
 	if !s.closed && s.current == g {
 		s.members.Updates().Commit(members.Revision, func() {
-			s.selectMeasured(members.Tags, networks, result)
+			s.selectMeasured(members.Tags, networks, results)
 		})
 	}
 	s.mu.Unlock()
@@ -48,11 +50,12 @@ func (s *Subscription) PerformUpdateCheck() {
 }
 
 // Called with s.mu held and the membership revision validated.
-func (s *Subscription) selectMeasured(tags []string, networks map[string][]string, result map[string]uint16) {
+func (s *Subscription) selectMeasured(tags []string, networks map[string][]string, results map[string]map[string]uint16) {
 	if s.options.Mode != C.TypeURLTest {
 		return
 	}
 	for network, selected := range map[string]*string{N.NetworkTCP: &s.selectedTCP, N.NetworkUDP: &s.selectedUDP} {
+		result := results[network]
 		best, found := result[*selected]
 		found = found && slices.Contains(networks[*selected], network)
 		for _, tag := range tags {
@@ -97,7 +100,6 @@ func (s *Subscription) URLTest(ctx context.Context) (map[string]uint16, error) {
 	}()
 	result := make(map[string]uint16)
 	measurements := make(map[string]urltest.Result)
-	networks := make(map[string][]string, len(members.Tags))
 	type job struct {
 		outbound adapter.Outbound
 		aliases  []string
@@ -105,18 +107,19 @@ func (s *Subscription) URLTest(ctx context.Context) (map[string]uint16, error) {
 	jobs := make(map[string]*job)
 	for _, tag := range members.Tags {
 		outbound, _ := g.outbounds.Outbound(tag)
-		networks[tag] = outboundNetworks(outbound, make(map[string]bool))
-		if !slices.Contains(networks[tag], N.NetworkTCP) {
-			continue
-		}
-		leaf, err := urltest.Resolve(outbound)
-		if err != nil {
-			continue
-		}
-		if work := jobs[leaf.Tag()]; work != nil {
-			work.aliases = append(work.aliases, tag)
-		} else {
-			jobs[leaf.Tag()] = &job{leaf, []string{tag}}
+		for _, network := range []string{N.NetworkTCP, N.NetworkUDP} {
+			leaf, err := urltest.ResolveNetwork(outbound, network)
+			if err != nil || !slices.Contains(leaf.Network(), N.NetworkTCP) {
+				continue
+			}
+			work := jobs[leaf.Tag()]
+			if work == nil {
+				work = &job{outbound: leaf}
+				jobs[leaf.Tag()] = work
+			}
+			if network == N.NetworkTCP {
+				work.aliases = append(work.aliases, tag)
+			}
 		}
 	}
 	var mu sync.Mutex

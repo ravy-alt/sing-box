@@ -83,3 +83,27 @@ func TestCheckOutboundDialerNetworkNestedSelectionAndInvalidPaths(t *testing.T) 
 	delete(manager.nodes, "outer")
 	require.ErrorContains(t, CheckOutboundDialerNetwork(context.Background(), exit, manager, "udp"), "unavailable")
 }
+
+type alternativeCapabilityNode struct {
+	*capabilityNode
+	transports []string
+}
+
+func (n *alternativeCapabilityNode) DialerNetworkAlternatives(string) []string { return n.transports }
+
+func TestCheckOutboundDialerNetworkAlternatives(t *testing.T) {
+	tcp := &capabilityNode{tag: "tcp", networks: []string{"tcp"}}
+	disabled := &capabilityNode{tag: "disabled", networks: nil}
+	relay := &capabilityGroup{&capabilityNode{tag: "relay"}, map[string]Outbound{"tcp": tcp, "udp": disabled}}
+	exit := &alternativeCapabilityNode{&capabilityNode{tag: "vpn", networks: []string{"udp"}, dependencies: []string{"relay"}}, []string{"udp", "tcp"}}
+	manager := &capabilityManager{nodes: map[string]Outbound{"relay": relay}}
+	require.NoError(t, CheckOutboundDialerNetwork(context.Background(), exit, manager, "udp"))
+	relay.selected["tcp"] = disabled
+	require.ErrorIs(t, CheckOutboundDialerNetwork(context.Background(), exit, manager, "udp"), ErrOutboundNetworkUnsupported)
+	relay.selected["tcp"] = nil
+	err := CheckOutboundDialerNetwork(context.Background(), exit, manager, "udp")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrOutboundNetworkUnsupported, "an unresolved alternative is not a disabled capability")
+	exit.transports = nil
+	require.ErrorContains(t, CheckOutboundDialerNetwork(context.Background(), exit, manager, "udp"), "no dialer transport")
+}

@@ -66,6 +66,31 @@ func CheckOutboundDialerNetwork(ctx context.Context, outbound Outbound, manager 
 		if !found {
 			return fmt.Errorf("probe detour [%s] is unavailable", OutboundDisplayName(ctx, dependencies[0]))
 		}
+		if alternatives, ok := outbound.(OutboundDialerNetworkAlternatives); ok {
+			var unsupported []error
+			var unresolved error
+			for _, transport := range alternatives.DialerNetworkAlternatives(network) {
+				err := walk(ctx, next, manager, transport, depth+1)
+				if err == nil {
+					return nil
+				}
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if errors.Is(err, ErrOutboundNetworkUnsupported) {
+					unsupported = append(unsupported, err)
+				} else {
+					unresolved = err
+				}
+			}
+			if unresolved != nil {
+				return unresolved
+			}
+			if len(unsupported) > 0 {
+				return errors.Join(unsupported...)
+			}
+			return fmt.Errorf("probe outbound [%s] has no dialer transport", OutboundDisplayName(ctx, outbound.Tag()))
+		}
 		dialerNetwork := DialerNetworkFor(outbound, network)
 		// SOCKS UDP also opens a TCP control connection. UoT only needs TCP.
 		if outbound.Type() == C.TypeSOCKS && network == N.NetworkUDP && dialerNetwork == N.NetworkUDP {

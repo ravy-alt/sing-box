@@ -74,7 +74,7 @@ TCP 流量优先使用 TCP 与 UDP 都测试成功的节点，其次是只有 TC
 | `udp_min_sessions` | `10` | 判断失败比例前至少需要的会话观察数。 |
 | `udp_failure_ratio` | `0.8` | 无回包比例达到该值时请求测速，并重置统计窗口。 |
 | `min_test_interval` | `30s` | 自动测速两次开始之间的最短间隔；面板 TCP 测速不受此冷却时间影响。 |
-| `test_concurrency` | `10` | 每组同时测试的节点数量；每个支持 TCP 的节点先执行最多 15 秒的 HTTP 测试；每个支持 UDP 的节点再按 `udp_test.timeout` 执行独立 UDP 测试，不以 HTTP 成功为前提。 |
+| `test_concurrency` | `10` | 每组同时执行的探测数量。HTTP 测试优先排队，每次最多 15 秒；UDP 测试按 `udp_test.timeout` 限时，不以 HTTP 成功为前提。已完成的 HTTP 结果可独立返回，无需等待 UDP。 |
 | `max_concurrent_dials` | `64` | 每组实际运行的业务/备选拨号数量上限，等待名额也计入此次拨号超时。 |
 
 自动触发会合并并限流。面板 TCP 测速独立执行，不等待自动测速的 UDP 阶段或冷却时间。测速流量带有贯穿嵌套组的标记，不计入业务失败统计，也不会建立或修改目标缓存。主动取消和本地并发名额不足不计为节点故障。
@@ -109,7 +109,7 @@ Clash 兼容 API：
 
 ### UDP 实测接口
 
-`GET /proxies/{name}/udp-delay?server=8.8.8.8&port=53&domain=example.com&timeout=5000` 执行真实的 UDP DNS 查询；超时参数单位为毫秒。省略参数时使用被测智能组的 `udp_test`，普通节点使用默认值。测试会递归固定当前 TCP 选择对应的最终节点，再测试该节点的 UDP，不借用组内其他节点的成功结果。返回 `alive`、`delay`、`time`、`outbound` 和探测参数；已执行但失败的探测返回 HTTP 200 与 `alive: false`。参数错误为 400，测试期间成员版本变化为 409，无法开始测试为 503。
+`GET /proxies/{name}/udp-delay?server=8.8.8.8&port=53&domain=example.com&timeout=5000` 执行真实的 UDP DNS 查询；超时参数单位为毫秒。省略参数时使用被测智能组的 `udp_test`，普通节点使用默认值。测试会递归固定当前 UDP 选择对应的最终节点，再测试该节点的 UDP，不借用组内其他节点的成功结果。返回 `alive`、`delay`、`time`、`outbound` 和探测参数；已执行但失败的探测返回 HTTP 200 与 `alive: false`。参数错误为 400，测试期间成员版本变化为 409，无法开始测试为 503。
 
 自动探测与 API 探测在拨号前统一检查最终节点声明的网络能力。不支持 UDP 或通过 `network: "tcp"` 禁用 UDP 的节点会跳过，不拨号、不发送探测包，也不新增或覆盖 UDP 历史。此时 API 返回 HTTP 200 与 `{"skipped":true,"reason":"udp_not_supported","outbound":"节点名"}`，不返回 `alive: false`。支持 `network` 字段的协议可使用此配置；`udp_over_tcp: false` 不表示禁用 UDP。设置 `log.level` 为 `debug` 可查看跳过原因及每次检测的成功、失败或取消结果，日志包含最终节点、DNS 服务器、查询域名，成功时包含耗时。
 

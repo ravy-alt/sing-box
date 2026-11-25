@@ -101,7 +101,7 @@ func UDPTestWithResult(parent context.Context, options option.UDPTestOptions, ou
 	}
 	ctx, cancel := context.WithTimeout(adapter.ContextWithURLTest(parent), time.Duration(r.Options.Timeout))
 	defer cancel()
-	leaf, err := Resolve(outbound)
+	leaf, err := ResolveNetwork(outbound, N.NetworkUDP)
 	if err != nil {
 		r.Err = err
 		return r

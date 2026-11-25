@@ -25,6 +25,13 @@ type OutboundDialerNetwork interface {
 	DialerNetwork(network string) string
 }
 
+// OutboundDialerNetworkAlternatives lists independently usable underlying
+// transports. Capability validation accepts any viable alternative, whereas
+// DialerNetwork reports the active/preferred transport for diagnostics.
+type OutboundDialerNetworkAlternatives interface {
+	DialerNetworkAlternatives(network string) []string
+}
+
 // DialerNetworkFor also accepts optional transports/plugins. Their default is
 // supplied by the caller; only transports which change it need to implement it.
 func DialerNetworkFor(dialer any, network string) string {

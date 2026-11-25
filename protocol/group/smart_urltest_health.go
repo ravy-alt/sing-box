@@ -292,7 +292,17 @@ func (c *smartConn) WriteBuffer(b *buf.Buffer) error {
 	c.health.wrote(err)
 	return err
 }
-func (c *smartConn) Close() error            { return c.health.Close() }
+func (c *smartConn) Close() error     { return c.health.Close() }
+func (c *smartConn) CloseRead() error { return N.CloseRead(c.ExtendedConn) }
+func (c *smartConn) CloseWrite() error {
+	writer, _ := N.UnwrapCountWriter(c.ExtendedConn, nil)
+	if duplex, ok := N.UnwrapWriter(writer).(N.WriteCloser); ok {
+		return duplex.CloseWrite()
+	}
+	// Protocols without half-close still need the normal close path to release
+	// the dial lease and stop passive health tracking exactly once.
+	return c.Close()
+}
 func (c *smartConn) Upstream() any           { return c.ExtendedConn }
 func (c *smartConn) ReaderReplaceable() bool { return false }
 func (c *smartConn) WriterReplaceable() bool { return false }

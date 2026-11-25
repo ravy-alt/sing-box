@@ -74,7 +74,7 @@ Existing connections are retained when rankings change. There is no retry or rep
 | `udp_min_sessions` | `10` | Minimum observations before evaluating the failure ratio. |
 | `udp_failure_ratio` | `0.8` | Request a test when at least this fraction of observed sessions have no reply, then reset the sample window. |
 | `min_test_interval` | `30s` | Minimum spacing between starts of automatic test rounds. Dashboard TCP probes are independent of this cooldown. |
-| `test_concurrency` | `10` | Maximum concurrently tested members per group. TCP-capable members run an HTTP probe with a 15-second limit. UDP-capable members then run an independent probe bounded by `udp_test.timeout`, regardless of the HTTP result. |
+| `test_concurrency` | `10` | Maximum concurrent probes per group. HTTP probes (up to 15 seconds each) are queued before UDP probes (bounded by `udp_test.timeout`). Completed HTTP measurements are available to callers without waiting for UDP; UDP probes do not require HTTP success. |
 | `max_concurrent_dials` | `64` | Maximum active underlying business/fallback dial calls per group. Waiting for capacity shares the attempt timeout. |
 
 Automatic requests are coalesced and rate limited. Dashboard TCP probes run independently, without waiting for the automatic UDP phase or cooldown. URL-test traffic is marked through nested groups and never contributes to business failure statistics or destination affinity. Cancelled attempts and local capacity exhaustion do not count as failed nodes.
@@ -109,7 +109,7 @@ Independent dashboard probes obey the requested `timeout`, including HTTP deadli
 
 ### UDP probe API
 
-`GET /proxies/{name}/udp-delay?server=8.8.8.8&port=53&domain=example.com&timeout=5000` performs a real UDP DNS exchange (timeout in milliseconds). Omitted parameters use the Smart group configuration or the node defaults. It recursively pins the current TCP-selected leaf and probes UDP through that exact node, without borrowing a fallback. Responses include `alive`, `delay`, `time`, `outbound` and probe parameters. A completed failed test returns HTTP 200 with `alive: false`; invalid parameters return 400, changed membership 409, and inability to start 503.
+`GET /proxies/{name}/udp-delay?server=8.8.8.8&port=53&domain=example.com&timeout=5000` performs a real UDP DNS exchange (timeout in milliseconds). Omitted parameters use the Smart group configuration or the node defaults. It recursively pins the current UDP-selected leaf and probes UDP through that exact node, without borrowing a fallback. Responses include `alive`, `delay`, `time`, `outbound` and probe parameters. A completed failed test returns HTTP 200 with `alive: false`; invalid parameters return 400, changed membership 409, and inability to start 503.
 
 Automatic and API probes share a capability check before dialing the final node. Nodes without UDP support, including those configured with `network: "tcp"`, are skipped without dialing, sending probe packets, or creating or overwriting UDP history. The API returns HTTP 200 with `{"skipped":true,"reason":"udp_not_supported","outbound":"node-name"}` instead of `alive: false`. The `network` option applies to protocols that expose it; `udp_over_tcp: false` does not disable UDP. Set `log.level` to `debug` to see skip reasons and successful, failed or cancelled test outcomes, including the final node, DNS server and query domain, plus the latency on success.
 

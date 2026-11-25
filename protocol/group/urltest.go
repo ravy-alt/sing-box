@@ -433,7 +433,7 @@ func (g *URLTestGroup) Select(network string) (adapter.Outbound, bool) {
 	var minDelay uint16
 	var best adapter.Outbound
 	if previous != nil && common.Contains(previous.Network(), network) {
-		if history := g.history.LoadOutboundHistory(previous, g.link); history != nil {
+		if history := g.history.LoadOutboundNetworkHistory(previous, g.link, network); history != nil && history.Delay > 0 {
 			best, minDelay = previous, history.Delay
 		}
 	}
@@ -441,8 +441,8 @@ func (g *URLTestGroup) Select(network string) (adapter.Outbound, bool) {
 		if !common.Contains(o.Network(), network) {
 			continue
 		}
-		history := g.history.LoadOutboundHistory(o, g.link)
-		if history != nil && (best == nil || int(minDelay) > int(history.Delay)+int(g.tolerance)) {
+		history := g.history.LoadOutboundNetworkHistory(o, g.link, network)
+		if history != nil && history.Delay > 0 && (best == nil || int(minDelay) > int(history.Delay)+int(g.tolerance)) {
 			best, minDelay = o, history.Delay
 		}
 	}
@@ -512,8 +512,10 @@ func (g *URLTestGroup) urlTest(ctx context.Context, force bool) (map[string]uint
 	// stale latency back into the shared history after a subscription refresh.
 	history := urltest.NewHistoryStorage()
 	for _, o := range outbounds {
-		if h := g.history.LoadOutboundHistory(o, g.link); h != nil {
-			history.StoreURLTestHistory(h.Outbound, h)
+		for _, network := range []string{N.NetworkTCP, N.NetworkUDP} {
+			if h := g.history.LoadOutboundNetworkHistory(o, g.link, network); h != nil {
+				history.StoreURLTestHistory(h.Outbound, h)
+			}
 		}
 	}
 	testCtx, cancel := context.WithCancel(ctx)
@@ -595,14 +597,21 @@ func testOutbounds(ctx context.Context, _ adapter.OutboundManager, history *urlt
 	}
 	jobs := make(map[string]*job)
 	for _, outbound := range outbounds {
-		resolved, err := urltest.Resolve(outbound)
-		if err != nil {
-			continue
-		}
-		if work := jobs[resolved.Tag()]; work != nil {
-			work.aliases = append(work.aliases, outbound.Tag())
-		} else {
-			jobs[resolved.Tag()] = &job{resolved, []string{outbound.Tag()}}
+		for _, network := range []string{N.NetworkTCP, N.NetworkUDP} {
+			resolved, err := urltest.ResolveNetwork(outbound, network)
+			if err != nil || !slices.Contains(resolved.Network(), N.NetworkTCP) {
+				continue
+			}
+			work := jobs[resolved.Tag()]
+			if work == nil {
+				work = &job{outbound: resolved}
+				jobs[resolved.Tag()] = work
+			}
+			// API delays continue to describe the TCP-selected leaf. The UDP
+			// leaf's HTTP latency is stored only under that leaf for ranking.
+			if network == N.NetworkTCP {
+				work.aliases = append(work.aliases, outbound.Tag())
+			}
 		}
 	}
 	result := make(map[string]uint16)

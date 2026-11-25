@@ -73,7 +73,13 @@ func SelectedLeaf(outbound adapter.Outbound) adapter.Outbound {
 }
 
 func (s *HistoryStorage) LoadOutboundHistory(outbound adapter.Outbound, link string) *adapter.URLTestHistory {
-	if leaf := SelectedLeaf(outbound); leaf != nil {
+	return s.LoadOutboundNetworkHistory(outbound, link, N.NetworkTCP)
+}
+
+// The measurement remains HTTP latency; network chooses the leaf whose
+// latency is relevant to this routing decision, not the probe transport.
+func (s *HistoryStorage) LoadOutboundNetworkHistory(outbound adapter.Outbound, link, network string) *adapter.URLTestHistory {
+	if leaf, err := ResolveNetwork(outbound, network); err == nil {
 		return s.LoadURLTestHistory(leaf.Tag(), link)
 	}
 	return nil

@@ -213,9 +213,13 @@ func TestUDPAPIUsesRequestedTargetAndStoresOnlyPinnedLeaf(t *testing.T) {
 		return client, nil
 	}}
 	options, _ := urltest.NormalizeUDPTest(option.UDPTestOptions{Domain: "group.example", Server: "192.0.2.53", ServerPort: 5353, Timeout: badoption.Duration(time.Second)})
-	b := &configuredProbeGroup{&testProvider{name: "b", all: []string{"leaf"}}, leaf, "https://b.example/"}
+	tcp := &tcpOnlyUDPProbe{&delayedProbe{&namedTestOutbound{name: "tcp-only"}, func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		t.Error("UDP API must not dial the TCP-selected node")
+		return nil, errors.New("unexpected TCP leaf")
+	}}}
+	b := &networkAPIProbeGroup{&configuredProbeGroup{&testProvider{name: "b", all: []string{"tcp-only", "leaf"}}, tcp, "https://b.example/"}, leaf}
 	a := &configuredUDPProbeGroup{&configuredProbeGroup{&testProvider{name: "a", all: []string{"b"}}, b, "https://a.example/"}, options}
-	s, _ := probeServer(t, []adapter.Outbound{a, b, leaf})
+	s, _ := probeServer(t, []adapter.Outbound{a, b, leaf, tcp})
 	w := udpRequest(s, "a", nil)
 	require.Equal(t, 200, w.Code, w.Body.String())
 	var result adapter.UDPTestHistory

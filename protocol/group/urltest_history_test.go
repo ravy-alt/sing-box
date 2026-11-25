@@ -116,3 +116,43 @@ func TestURLTestDetourProbeFailureDoesNotEraseOtherURLs(t *testing.T) {
 	require.Error(t, err)
 	require.Len(t, s.history.URLs(leaf.Tag()), 2, "probe traffic must not invalidate the detour's independent histories")
 }
+
+func TestURLTestMeasuresBothNetworkSelectionsWithOwnURL(t *testing.T) {
+	var hits int
+	var mu sync.Mutex
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/outer", r.URL.Path)
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		w.WriteHeader(204)
+	}))
+	t.Cleanup(target.Close)
+	dial := func(ctx context.Context, network string, dst M.Socksaddr) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, dst.String())
+	}
+	tcp, udp := smartNode("tcp-leaf", dial), smartNode("udp-leaf", dial)
+	inner := &splitNetworkGroup{&historyTestGroup{smartNode("inner", nil), tcp, target.URL + "/inner"}, udp}
+	outer := &historyTestGroup{smartNode("outer", nil), inner, target.URL + "/outer"}
+	s, manager := smartFixture(t, option.SmartURLTestOutboundOptions{}, outer)
+	g, err := NewURLTestGroup(s.ctx, manager, logger.NOP(), []adapter.Outbound{outer, inner}, target.URL+"/outer", time.Hour, 50, time.Hour, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { g.Close() })
+	result, err := g.URLTest(s.ctx)
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	for _, leaf := range []string{"tcp-leaf", "udp-leaf"} {
+		require.NotNil(t, s.history.LoadURLTestHistory(leaf, g.link))
+		require.Nil(t, s.history.LoadURLTestHistory(leaf, inner.link))
+	}
+	require.Equal(t, s.history.LoadURLTestHistory("tcp-leaf", g.link).Delay, result["outer"])
+	require.Equal(t, result["outer"], result["inner"])
+	require.Empty(t, s.history.URLs("inner"))
+	require.Empty(t, s.history.URLs("outer"))
+	// A cached check must reuse both measurements, not re-probe the UDP leaf.
+	_, err = g.urlTest(s.ctx, false)
+	require.NoError(t, err)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, 2, hits)
+}

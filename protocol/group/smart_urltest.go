@@ -395,7 +395,12 @@ func (s *SmartURLTest) URLTest(ctx context.Context) (map[string]uint16, error) {
 				}
 			}
 			return nil, ctx.Err()
+		case <-s.probeCtx.Done():
+			return nil, net.ErrClosed
 		case <-round.done:
+			if s.probeCtx.Err() != nil {
+				return nil, net.ErrClosed
+			}
 			if errors.Is(round.err, errSmartMembersChanged) && attempt == 0 {
 				continue
 			}
@@ -409,7 +414,8 @@ func (s *SmartURLTest) URLTest(ctx context.Context) (map[string]uint16, error) {
 // this group's URL when read, rather than storing a second set of group delays.
 func (s *SmartURLTest) publishTest(round *smartTestRound, results map[string]uint16, final bool) bool {
 	snapshot := round.snapshot
-	return s.members.Updates().Commit(snapshot.Revision, func() {
+	committed := false
+	s.members.Updates().Commit(snapshot.Revision, func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if s.probeCtx.Err() != nil || s.round != round || round.finalized || (!final && len(results) < round.published) {
@@ -423,8 +429,9 @@ func (s *SmartURLTest) publishTest(round *smartTestRound, results map[string]uin
 		for _, observation := range round.udpMeasurements {
 			observation.Store(s.history)
 		}
-
+		committed = true
 	})
+	return committed
 }
 
 func (s *SmartURLTest) runTest(snapshot *groupmembers.Snapshot, round *smartTestRound) {
@@ -486,27 +493,45 @@ func (s *SmartURLTest) runTest(snapshot *groupmembers.Snapshot, round *smartTest
 	type measurement struct {
 		index  int
 		result urltest.Result
-		udp    urltest.UDPResult
+		udp    *urltest.UDPResult
 	}
-	completed := make(chan measurement, len(jobs))
+	// Queue HTTP work before UDP work. Slow UDP probes must neither delay
+	// publishing completed HTTP results nor occupy every worker before the
+	// remaining members have had their TCP latency measured.
+	type task struct {
+		index int
+		udp   bool
+	}
+	var tasks []task
+	for index, job := range jobs {
+		if job.testTCP && slices.Contains(job.outbound.Network(), N.NetworkTCP) {
+			tasks = append(tasks, task{index: index})
+		}
+	}
+	tcpPending := len(tasks)
+	for index := range jobs {
+		tasks = append(tasks, task{index: index, udp: true})
+	}
+	completed := make(chan measurement, len(tasks))
 	var next atomic.Int64
 	var workers sync.WaitGroup
-	for range min(len(jobs), s.options.TestConcurrency) {
+	for range min(len(tasks), s.options.TestConcurrency) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
 			for {
 				index := int(next.Add(1)) - 1
-				if index >= len(jobs) || s.probeCtx.Err() != nil {
+				if index >= len(tasks) || s.probeCtx.Err() != nil {
 					return
 				}
-				var result urltest.Result
-				if jobs[index].testTCP && slices.Contains(jobs[index].outbound.Network(), N.NetworkTCP) {
-					result = s.probe(jobs[index].outbound)
+				work := tasks[index]
+				if work.udp {
+					// The shared probe checks capability and logs explicit skips.
+					udp := urltest.UDPTestWithResult(s.probeCtx, *s.options.UDPTest, jobs[work.index].outbound)
+					completed <- measurement{index: work.index, udp: &udp}
+				} else {
+					completed <- measurement{index: work.index, result: s.probe(jobs[work.index].outbound)}
 				}
-				// The shared probe checks capability and logs explicit skips.
-				udp := urltest.UDPTestWithResult(s.probeCtx, *s.options.UDPTest, jobs[index].outbound)
-				completed <- measurement{index: index, result: result, udp: udp}
 			}
 		}()
 	}
@@ -515,22 +540,29 @@ func (s *SmartURLTest) runTest(snapshot *groupmembers.Snapshot, round *smartTest
 	for item := range completed {
 		s.mu.Lock()
 		leafTag := jobs[item.index].outbound.Tag()
-		round.measurements[leafTag] = item.result
-		round.udpMeasurements[leafTag] = item.udp
-		for _, tag := range jobs[item.index].aliases {
-			if item.result.Outbound != "" && item.result.Err == nil {
-				results[tag] = item.result.Delay
-				round.partial[tag] = item.result.Delay
+		if item.udp != nil {
+			round.udpMeasurements[leafTag] = *item.udp
+		} else {
+			tcpPending--
+			round.measurements[leafTag] = item.result
+			for _, tag := range jobs[item.index].aliases {
+				if item.result.Outbound != "" && item.result.Err == nil {
+					results[tag] = item.result.Delay
+					round.partial[tag] = item.result.Delay
+				}
 			}
 		}
 		s.mu.Unlock()
+		if item.udp == nil && tcpPending == 0 {
+			s.publishTest(round, results, false)
+		}
 	}
 	committed := s.publishTest(round, results, true)
-	if !committed {
+	if s.probeCtx.Err() != nil {
+		round.err = net.ErrClosed
+	} else if !committed {
 		round.err = errSmartMembersChanged
 		s.requestTest()
-	} else if s.probeCtx.Err() != nil {
-		round.err = net.ErrClosed
 	} else if len(results) == 0 {
 		round.err = errors.New("smart-urltest: all TCP probes failed")
 	} else {

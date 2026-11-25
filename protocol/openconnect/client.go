@@ -71,6 +71,22 @@ type clientState struct {
 	tunnelInfo       adapter.OpenConnectTunnelInfo
 }
 
+func (e *Endpoint) DialerNetwork(string) string {
+	if state := e.state.Load(); state != nil {
+		switch state.tunnelInfo.Transport {
+		case openconnect.TransportDTLS, openconnect.TransportESP:
+			return N.NetworkUDP
+		}
+	}
+	return N.NetworkTCP
+}
+
+func (e *Endpoint) DialerNetworkAlternatives(string) []string {
+	// Authentication/control always needs TCP. DTLS/ESP is optional and can
+	// fall back to the TLS tunnel, including when that tunnel carries UDP.
+	return []string{N.NetworkTCP}
+}
+
 func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.OpenConnectEndpointOptions) (adapter.Endpoint, error) {
 	tcpKeepAliveEnabled := options.TCPKeepAliveEnabled || options.TCPKeepAlive != 0 || options.TCPKeepAliveInterval != 0
 	if tcpKeepAliveEnabled && options.DisableTCPKeepAlive {
